@@ -1,0 +1,7 @@
+[
+  { "id": "pomodoro", "intent": "a pomodoro timer with start, pause and reset, and a count of completed sessions" },
+  { "id": "todo", "intent": "a to-do list that saves tasks in the browser so they survive a reload" },
+  { "id": "converter", "intent": "a unit converter for length, weight and temperature with instant results" },
+  { "id": "csv-stats", "intent": "a Node.js command-line script that reads a CSV file and prints row count and the mean of each numeric column" },
+  { "id": "markdown", "intent": "a markdown previewer with a live split view: editor on the left, rendered output on the right" }
+]
