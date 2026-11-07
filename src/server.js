@@ -18,7 +18,8 @@ const PORT = Number(process.env.PORT || 4317);
 const PREVIEW_PORT = Number(process.env.PREVIEW_PORT || PORT + 1);
 const MOCK_DELAY = Number(process.env.CONJURE_MOCK_DELAY || 0);
 
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };
+const STATIC = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"]);
 
 let current = null; // { controller } while a run is in progress
 
@@ -120,6 +121,9 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
     return serveFile(res, path.join(PUBLIC, "index.html"));
+  }
+  if (req.method === "GET" && STATIC.has(url.pathname)) {
+    return serveFile(res, path.join(PUBLIC, url.pathname.slice(1)));
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, { live: hasCredentials(), busy: Boolean(current), previewOrigin: `http://localhost:${PREVIEW_PORT}` });

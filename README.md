@@ -42,6 +42,21 @@ CLI flags: `--mock`, `--model <id>`, `--out <dir>`, `--flaw` (mock only: injects
 
 Environment variables: `CONJURE_MODEL`, `CONJURE_OUT` (default `./conjured`), `CONJURE_FALLBACKS`, `CONJURE_TIMEOUT_MS` (per API request), `CONJURE_MAX_RETRIES` (default 3; retries rate limits, overloads and connection errors), `CONJURE_MOCK=1`, `CONJURE_MOCK_DELAY` (ms per mock turn, for testing Stop), `PORT`, `PREVIEW_PORT`.
 
+## On your phone
+
+**Install as a web app (PWA):** open the UI in the phone's browser and choose *Add to Home screen*; it ships a manifest and icons.
+
+**Android app:** `android/` holds a small WebView app (`com.conjure.app`), built without Gradle:
+
+```bash
+bash android/build.sh                               # -> android/build/conjure.apk (needs Android SDK + JDK)
+adb install -r android/build/conjure.apk
+adb reverse tcp:4317 tcp:4317 && adb reverse tcp:4318 tcp:4318
+npm start                                           # the app opens http://localhost:4317 on the phone
+```
+
+To point the app at another server: `adb shell am start -n com.conjure.app/.MainActivity --es url http://host:4317/` (remembered). Zip downloads go to the phone's Downloads folder.
+
 ## Evaluate it
 
 `eval/intents.json` holds five representative requests (three web apps, a Node CLI script, a live-preview tool). The harness runs each through Conjure and writes `eval-report.md` and `eval-results.json` with pass rate, repair rounds, tokens and estimated cost.
