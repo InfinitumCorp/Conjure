@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Generates Conjure's app icons as PNGs (no dependencies): a violet tile with a
-// white four-point sparkle. Writes web icons to public/ and launcher icons to android/.
+// Generates Conjure's app icons as PNGs (no dependencies): an ink (#111820) tile with a
+// white four-point sparkle, per the Infinitum palette. Writes web icons to public/ and launcher icons to android/.
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -22,9 +22,8 @@ function png(size, { rounded = true } = {}) {
         const dy = Math.max(r - y, y - (size - 1 - r), 0);
         a = Math.min(1, Math.max(0, r - Math.hypot(dx, dy) + 0.5));
       }
-      // Diagonal violet gradient.
-      const t = (x + y) / (2 * size);
-      let R = 124 - 40 * t, G = 92 - 40 * t, B = 255 - 30 * t;
+      // Flat ink (#111820): no gradients.
+      let R = 0x11, G = 0x18, B = 0x20;
       // Four-point sparkle: |dx|^0.5 + |dy|^0.5 <= k
       const nx = Math.abs(x - c) / size, ny = Math.abs(y - c) / size;
       const s = Math.sqrt(nx) + Math.sqrt(ny);

@@ -22,6 +22,7 @@ const HOST = process.env.HOST || "127.0.0.1";
 // Public URL of the preview server when it sits behind a proxy (e.g. https://preview.example.com).
 const PREVIEW_ORIGIN = process.env.PREVIEW_ORIGIN || `http://localhost:${PREVIEW_PORT}`;
 const ACCESS_TOKEN = process.env.CONJURE_ACCESS_TOKEN || "";
+const ABORT_ON_DISCONNECT = process.env.CONJURE_ABORT_ON_DISCONNECT === "1";
 const MOCK_DELAY = Number(process.env.CONJURE_MOCK_DELAY || 0);
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };
@@ -91,17 +92,31 @@ function sameOrigin(req) {
 }
 
 const LOGIN_PAGE = (error) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Conjure · sign in</title>
-<meta name="theme-color" content="#5b3df5"><link rel="icon" type="image/png" href="/icon-192.png">
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f0f12;color:#eee;font:15px/1.5 system-ui,sans-serif}
-form{width:min(360px,calc(100vw - 32px));display:grid;gap:12px}h1{margin:0 0 4px;font-size:24px}
-input{padding:12px;border-radius:10px;border:1px solid #333;background:#18181d;color:#eee;font:inherit}
-button{padding:12px;border:0;border-radius:10px;background:#5b3df5;color:#fff;font:inherit;font-weight:600}
-p{margin:0;color:#aaa;font-size:13px}.err{color:#ff8a8a}</style></head><body>
-<form method="post" action="/login"><h1>✦ Conjure</h1><p>Enter the access token for this server.</p>
-${error ? `<p class="err">${error}</p>` : ""}
-<input name="token" type="password" autocomplete="current-password" placeholder="Access token" required autofocus>
-<button>Sign in</button></form></body></html>`;
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Conjure · Sign in</title>
+<meta name="theme-color" content="#ffffff"><link rel="icon" type="image/png" href="/icon-192.png">
+<style>:root{--paper:#fff;--ink:#111820;--muted:#52606b;--line:#d6dce1;--accent:#2454dd;color-scheme:light}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;flex-direction:column;background:var(--paper);color:var(--ink);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:16px;line-height:1.55}
+main{flex:1;display:flex;align-items:center;padding:48px clamp(16px,4vw,48px)}
+form{width:min(520px,100%);display:grid;gap:18px}
+h1{font-weight:400;margin:0;font-size:clamp(56px,9vw,112px);line-height:.98;letter-spacing:-.065em}
+sup.tm{font-size:.38em;vertical-align:super;line-height:0;margin-left:.08em;letter-spacing:0;font-weight:400}
+p{margin:0;color:var(--muted)}.err{color:var(--ink);font-weight:700}
+label{font-size:13px;color:var(--muted)}
+input{width:100%;padding:16px;border:1px solid var(--ink);border-radius:0;background:var(--paper);color:var(--ink);font:inherit;font-size:18px}
+input:focus{outline:none;border-color:var(--accent)}
+button{justify-self:start;padding:17px 22px;border:1px solid var(--ink);border-radius:0;background:var(--ink);color:#fff;font:inherit;cursor:pointer;transition:background .2s,border-color .2s}
+button:hover{background:var(--accent);border-color:var(--accent)}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:5px}
+footer{padding:22px clamp(16px,4vw,48px);border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+footer .tm{font-size:.65em}</style></head><body>
+<main><form method="post" action="/login"><h1>Conjure<sup class="tm">™</sup></h1>
+<p>Sign in with the access token for this server.</p>
+${error ? `<p class="err" role="alert">${error}</p>` : ""}
+<label for="token">Access token</label>
+<input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
+<button>Sign in</button></form></main>
+<footer>Conjure<sup class="tm">™</sup> · Infinitum Corporation</footer></body></html>`;
 
 async function handleLogin(req, res) {
   if (req.method === "GET") return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(LOGIN_PAGE(""));
@@ -159,13 +174,15 @@ function friendly(err) {
 }
 
 /** Streams a run's events as server-sent events; aborts the run if the client disconnects. */
-async function runJob(req, res, mock, flaw, job) {
+async function runJob(req, res, mock, flaw, job, label) {
   if (current) return res.writeHead(409).end("a run is already in progress");
   const controller = new AbortController();
-  current = { controller };
+  current = { controller, label, startedAt: new Date().toISOString() };
   let finished = false;
+  // A dropped connection (phone screen locked, tab closed) does not cancel the run by default:
+  // the result lands in history, and Stop / POST /api/cancel still cancels it.
   res.on("close", () => {
-    if (!finished) controller.abort();
+    if (!finished && ABORT_ON_DISCONNECT) controller.abort();
   });
 
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -193,6 +210,11 @@ async function runJob(req, res, mock, flaw, job) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("x-frame-options", "DENY");
+  res.setHeader("referrer-policy", "same-origin");
+  res.setHeader("content-security-policy", "frame-ancestors 'none'");
+  if (url.pathname.startsWith("/api/")) res.setHeader("cache-control", "no-store");
 
   if (req.method === "GET" && url.pathname === "/healthz") return json(res, 200, { ok: true });
   if (req.method === "GET" && STATIC.has(url.pathname)) {
@@ -217,7 +239,10 @@ const server = http.createServer(async (req, res) => {
     return serveFile(res, path.join(PUBLIC, "index.html"));
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
-    return json(res, 200, { live: hasCredentials(), busy: Boolean(current), previewOrigin: PREVIEW_ORIGIN });
+    return json(res, 200, {
+      live: hasCredentials(), busy: Boolean(current), previewOrigin: PREVIEW_ORIGIN,
+      job: current ? { label: current.label, startedAt: current.startedAt } : null,
+    });
   }
   if (req.method === "GET" && url.pathname === "/api/history") {
     return json(res, 200, await history());
@@ -256,7 +281,7 @@ const server = http.createServer(async (req, res) => {
         return res.writeHead(400).end("intent must be a non-empty string under 4000 chars");
       }
       return runJob(req, res, payload.mock, payload.flaw, (provider, signal, onEvent) =>
-        conjure({ intent: payload.intent, provider, outDir: OUT, signal, onEvent }));
+        conjure({ intent: payload.intent, provider, outDir: OUT, signal, onEvent }), payload.intent.slice(0, 120));
     }
     const dir = typeof payload.dir === "string" && !payload.dir.includes("/") && !payload.dir.includes("\\") ? confined(OUT, payload.dir) : null;
     if (!dir) return res.writeHead(400).end("dir must name a deliverable folder");
@@ -264,7 +289,7 @@ const server = http.createServer(async (req, res) => {
       return res.writeHead(400).end("change must be a non-empty string under 4000 chars");
     }
     return runJob(req, res, payload.mock, false, (provider, signal, onEvent) =>
-      refine({ dir, change: payload.change, provider, signal, onEvent }));
+      refine({ dir, change: payload.change, provider, signal, onEvent }), `refine ${payload.dir}: ${payload.change.slice(0, 100)}`);
   }
   res.writeHead(404).end("not found");
 });
@@ -278,8 +303,12 @@ const preview = http.createServer(async (req, res) => {
   } catch {
     return res.writeHead(400).end("bad path");
   }
-  const name = path.basename(rel);
-  if (name === "transcript.jsonl") return res.writeHead(404).end("not found");
+  res.setHeader("x-content-type-options", "nosniff");
+  res.setHeader("referrer-policy", "no-referrer");
+  // Run records stay private: only the deliverable's own files are served.
+  const parts = rel.split("/");
+  if (parts.length === 2 && (parts[1] === "transcript.jsonl" || parts[1] === "conjure.json")) return res.writeHead(404).end("not found");
+  if (path.basename(rel) === "transcript.jsonl") return res.writeHead(404).end("not found");
   const file = confined(OUT, rel);
   if (!file) return res.writeHead(400).end("bad path");
   return serveFile(res, file);

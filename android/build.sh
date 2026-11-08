@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Builds android/build/conjure.apk without Gradle: aapt2 -> javac -> d8 -> zipalign -> apksigner.
+# Builds android/build/conjure.apk without Gradle. Set CONJURE_URL to choose the server the app opens.
+# Builds without Gradle: aapt2 -> javac -> d8 -> zipalign -> apksigner.
 # Needs: Android SDK (ANDROID_HOME or the default Windows location), a JDK with javac,
 # and a debug keystore (~/.android/debug.keystore; created with keytool if missing).
 set -euo pipefail
@@ -17,7 +18,17 @@ echo "platform:    $PLATFORM"
 
 rm -rf build && mkdir -p build/res build/classes build/dex
 
-"$BT/aapt2$EXE" compile --dir res -o build/res.zip
+RES=res
+if [ -n "${CONJURE_URL:-}" ]; then
+  case "$CONJURE_URL" in http://*|https://*) ;; *) echo "CONJURE_URL must start with http:// or https://"; exit 1;; esac
+  url="${CONJURE_URL%/}/"
+  cp -r res build/res-src && RES=build/res-src
+  # Plain URL characters only: nothing that needs XML or sed escaping.
+  if ! printf '%s' "$url" | grep -Eq '^https?://[A-Za-z0-9._~:/?=%-]+$'; then echo "CONJURE_URL has unsupported characters"; exit 1; fi
+  sed -i "s|<string name=\"server_url\"[^>]*>[^<]*</string>|<string name=\"server_url\" translatable=\"false\">$url</string>|" "$RES/values/config.xml"
+  echo "server:      $url"
+fi
+"$BT/aapt2$EXE" compile --dir "$RES" -o build/res.zip
 "$BT/aapt2$EXE" link -I "$JAR" --manifest AndroidManifest.xml -o build/unsigned.apk \
   --java build/gen build/res.zip --auto-add-overlay
 

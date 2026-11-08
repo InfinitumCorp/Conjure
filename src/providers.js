@@ -195,8 +195,10 @@ function indexHtml(title) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escapeHtml(title)}</title>
 <style>
-  body { font-family: system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; background: #0f1115; color: #f2f2f2; }
-  button { font-size: 1rem; padding: .7rem 1.4rem; border-radius: .5rem; border: 0; background: #7c5cff; color: white; cursor: pointer; }
+  body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; background: #ffffff; color: #111820; }
+  h1 { font-weight: 400; letter-spacing: -.055em; }
+  button { font: inherit; padding: 17px 22px; border-radius: 0; border: 1px solid #111820; background: #111820; color: #fff; cursor: pointer; }
+  button:hover { background: #2454dd; border-color: #2454dd; }
 </style>
 </head>
 <body>

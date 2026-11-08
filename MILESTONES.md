@@ -6,7 +6,7 @@ Status key: ✅ done · 🔨 in progress · ⏳ blocked · ⬜ not started
 - Plan → forge → verify → repair → deliver pipeline on `claude-opus-5-5`
 - Sandboxed workspace (path confinement, size and count limits)
 - CLI, local web UI with live preview, offline mock provider
-- 7 offline tests (now 17)
+- 7 offline tests (now 30, including server integration tests)
 
 ## M2 — Reliability and visibility ✅
 - Cancel a run from the CLI (Ctrl+C) or the UI (Stop button); the in-flight API request is aborted
@@ -29,7 +29,16 @@ Status key: ✅ done · 🔨 in progress · ⏳ blocked · ⬜ not started
 - ⏳ Run it live and record the baseline
 - Tune prompts and effort level from those results
 
-## M6 — Ship it 🔨
+## M6 — Ship it ✅
 - ✅ Download a deliverable as a zip: `conjure zip <dir>` or the UI's **Download .zip** button (zero-dependency writer, transcript excluded, verified with Python's `zipfile` and Windows `Expand-Archive`)
-- ⏳ One-click deploy of a web deliverable (e.g. Vercel; needs the Vercel connector authorized via `/mcp`)
-- ✅ Conjure lives in `Documents/Conjure` under git (initialized; nothing committed yet)
+- ✅ Conjure lives in `Documents/Conjure` under git
+- ✅ Installable web app (manifest, icons) and Android app (`android/`, built without Gradle, tested on a TECNO KM4 / Android 15)
+- ✅ Hosted on AWS (us-east-2): EC2 + Caddy HTTPS on sslip.io, sign-in token, secrets in SSM, one-command deploy (`deploy/aws/deploy.mjs`)
+- ✅ Hardening: security headers, cross-site and non-JSON POSTs refused, run records private on the preview host, runs survive dropped connections
+- ⬜ One-click deploy of a *deliverable* (e.g. Vercel; needs the Vercel connector authorized via `/mcp`)
+
+## M7 — After launch ⬜
+- Run the live eval (M5) once the API key is in `.env`, then redeploy to switch the server to live Claude
+- A custom domain instead of sslip.io
+- Backups of `/var/lib/conjure` (EBS snapshots or S3) and basic alarms
+- A release-signed APK (currently signed with the debug key) for wider distribution

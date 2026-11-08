@@ -20,7 +20,7 @@ intent ──► PLAN ──► FORGE ──► VERIFY ──► DELIVER
 | Deliver | Writes `conjure.json` (plan, verification results, token usage, cost estimate, timing, change history) and `transcript.jsonl` (every event of every run) next to the output. | `src/engine.js` |
 | Refine  | Applies a follow-up change to an existing deliverable through the same forge, verify and repair loop, and appends it to `conjure.json` history. | `src/engine.js` |
 
-Runs can be cancelled with Ctrl+C in the CLI or the **Stop** button in the UI; the in-flight API request is aborted and the transcript is still saved. Cost estimates use list prices in `src/pricing.js`. Milestones are tracked in [MILESTONES.md](MILESTONES.md).
+Runs can be cancelled with Ctrl+C in the CLI or the **Stop** button in the UI; the in-flight API request is aborted and the transcript is still saved. In the web UI a run keeps going if the browser disconnects (for example a phone screen locks): the page shows it as in progress when you come back, and the result lands in History. Set `CONJURE_ABORT_ON_DISCONNECT=1` to cancel on disconnect instead. Cost estimates use list prices in `src/pricing.js`. Milestones are tracked in [MILESTONES.md](MILESTONES.md).
 
 **Safety:** model-supplied paths are confined to the deliverable's folder (`src/workspace.js`), with file-size and file-count limits. Tool inputs are validated before they run. Refusals are surfaced, not ignored. Server-side refusal fallback is on (`fallbacks: "default"`); set `CONJURE_FALLBACKS=0` to turn it off. The web UI listens on 127.0.0.1 only and serves conjured output from a separate port, so generated code can't call the Conjure API.
 
@@ -28,7 +28,7 @@ Runs can be cancelled with Ctrl+C in the CLI or the **Stop** button in the UI; t
 
 ```bash
 npm install
-npm test                                          # 17 tests, offline
+npm test                                          # 30 tests, offline
 node src/cli.js "a habit tracker"                 # build something new
 node src/cli.js refine conjured/<folder> "add dark mode"   # change it
 node src/cli.js zip conjured/<folder>                      # package it as a .zip
@@ -50,12 +50,13 @@ Environment variables: `CONJURE_MODEL`, `CONJURE_OUT` (default `./conjured`), `C
 
 ```bash
 bash android/build.sh                               # -> android/build/conjure.apk (needs Android SDK + JDK)
+CONJURE_URL=https://app.<ip>.sslip.io bash android/build.sh   # same, opening your AWS server by default
 adb install -r android/build/conjure.apk
 adb reverse tcp:4317 tcp:4317 && adb reverse tcp:4318 tcp:4318
 npm start                                           # the app opens http://localhost:4317 on the phone
 ```
 
-To point the app at another server: `adb shell am start -n com.conjure.app/.MainActivity --es url http://host:4317/` (remembered). Zip downloads go to the phone's Downloads folder.
+To point the app at another server: use **Use this server** on its "Can't reach Conjure" screen, or `adb shell am start -n com.conjure.app/.MainActivity --es url http://host:4317/` (remembered). Zip downloads go to the phone's Downloads folder and carry the sign-in session.
 
 ## Deploy to AWS
 
@@ -70,6 +71,8 @@ node deploy/aws/deploy.mjs --destroy --yes
 
 - **Sign-in:** the first deploy generates an access token, stores it in SSM Parameter Store (`/conjure/access-token`) and saves a copy to `.conjure-access-token` (git-ignored). With `CONJURE_ACCESS_TOKEN` set, every page and API call needs it (cookie after `/login`, or `Authorization: Bearer`); cross-site and non-JSON POSTs are refused.
 - **Live mode:** if `.env` has `ANTHROPIC_API_KEY`, the deploy stores it as `/conjure/anthropic-api-key`; without it the server runs in offline mock mode.
+- **Previews:** the preview host serves only a deliverable's own files (never `conjure.json` or `transcript.jsonl`) and needs no sign-in, so anyone with a deliverable's exact URL can open it. Folder names carry a random suffix.
+- **Data:** deliverables live on the instance's disk (`/var/lib/conjure`) and are deleted with the stack.
 - **No SSH:** port 22 is closed; use SSM Session Manager. The template (`deploy/aws/conjure.yaml`) builds its own VPC, so it doesn't depend on a default VPC.
 - **Android:** `adb shell am start -n com.conjure.app/.MainActivity --es url https://app.<ip>.sslip.io/`
 

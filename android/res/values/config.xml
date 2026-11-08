@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Server the app opens on first launch. build.sh replaces it when CONJURE_URL is set. -->
+    <string name="server_url" translatable="false">http://localhost:4317/</string>
+</resources>
