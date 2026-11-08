@@ -1,0 +1,8 @@
+{
+  "repo": "InfinitumCorp/infinitum-nexus",
+  "commit": "330d5a0",
+  "files": [
+    "packages/conjure/src/conjure.ts",
+    "packages/scalus/src/llm.ts"
+  ]
+}

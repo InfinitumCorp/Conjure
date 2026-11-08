@@ -2,7 +2,6 @@
 // Web UI for Conjure. Binds to 127.0.0.1 by default (HOST to change). When
 // CONJURE_ACCESS_TOKEN is set (cloud deploys), every page and API call needs a login.
 import http from "node:http";
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +9,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { conjure, refine, ConjureError, ConjureCancelled } from "./engine.js";
 import { makeProvider, hasCredentials, DEFAULT_OUT } from "./config.js";
 import { zipDeliverable } from "./zip.js";
+import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
+import { PredictionService, publicView } from "./predict/service.js";
+import { ConjureError as PredictError } from "./predict/vendor/conjure.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.resolve(here, "..", "public");
@@ -24,6 +26,15 @@ const PREVIEW_ORIGIN = process.env.PREVIEW_ORIGIN || `http://localhost:${PREVIEW
 const ACCESS_TOKEN = process.env.CONJURE_ACCESS_TOKEN || "";
 const ABORT_ON_DISCONNECT = process.env.CONJURE_ABORT_ON_DISCONNECT === "1";
 const MOCK_DELAY = Number(process.env.CONJURE_MOCK_DELAY || 0);
+// Staff, product keys, predictions and usage. Kept outside OUT: the preview server serves OUT.
+const DATA = path.resolve(process.env.CONJURE_DATA || "conjure-data");
+const access = await new AccessStore({ file: path.join(DATA, "access.json"), ownerToken: ACCESS_TOKEN }).load();
+const predictions = new PredictionService({
+  dir: path.join(DATA, "predictions"),
+  delayMs: MOCK_DELAY,
+  onFinish: (rec) => access.logUsage({ kind: "prediction", id: rec.id, product: rec.product, user: rec.user, status: rec.status, ms: rec.ms, calls: rec.sim?.calls ?? 0, mode: rec.mode }),
+});
+await predictions.load();
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };
 const STATIC = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"]);
@@ -55,29 +66,28 @@ async function readJson(req, limit = 16 * 1024) {
   return JSON.parse(body);
 }
 
-// --- Access control (only when CONJURE_ACCESS_TOKEN is set) ---
+// --- Access control (only when CONJURE_ACCESS_TOKEN is set; otherwise local and open) ---
 const COOKIE = "conjure_session";
-const sessionValue = ACCESS_TOKEN ? crypto.createHmac("sha256", ACCESS_TOKEN).update("conjure-session-v1").digest("hex") : "";
-
-function safeEqual(a, b) {
-  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
-}
 
 function cookies(req) {
   const out = {};
   for (const part of (req.headers.cookie || "").split(";")) {
     const i = part.indexOf("=");
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i > 0) {
+      try {
+        out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+      } catch {}
+    }
   }
   return out;
 }
 
-function authorized(req) {
-  if (!ACCESS_TOKEN) return true;
-  const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || "")?.[1];
-  if (bearer && safeEqual(bearer, ACCESS_TOKEN)) return true;
-  return safeEqual(cookies(req)[COOKIE] || "", sessionValue);
+/** Staff (owner token, staff token or session cookie), a product (product key), or null. */
+function principal(req) {
+  const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || "")?.[1]?.trim();
+  if (bearer) return access.staffByToken(bearer) || access.productByKey(bearer);
+  if (!access.enabled) return { kind: "staff", id: "local", name: "Local", role: "admin" };
+  return access.staffBySession(cookies(req)[COOKIE]);
 }
 
 /** Rejects cross-site writes: browsers send Origin on POST, and it must match this host. */
@@ -111,9 +121,9 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline
 footer{padding:22px clamp(16px,4vw,48px);border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 footer .tm{font-size:.65em}</style></head><body>
 <main><form method="post" action="/login"><h1>Conjure<sup class="tm">™</sup></h1>
-<p>Sign in with the access token for this server.</p>
+<p>Private to Infinitum staff. Sign in with your staff token.</p>
 ${error ? `<p class="err" role="alert">${error}</p>` : ""}
-<label for="token">Access token</label>
+<label for="token">Staff token</label>
 <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
 <button>Sign in</button></form></main>
 <footer>Conjure<sup class="tm">™</sup> · Infinitum Corporation</footer></body></html>`;
@@ -125,17 +135,23 @@ async function handleLogin(req, res) {
     body += chunk;
     if (body.length > 4096) return res.writeHead(413).end();
   }
-  const token = new URLSearchParams(body).get("token") || "";
-  if (!safeEqual(token, ACCESS_TOKEN)) {
+  const token = (new URLSearchParams(body).get("token") || "").trim();
+  const who = access.staffByToken(token); // product keys can't sign in
+  if (!who) {
     await new Promise((r) => setTimeout(r, 750)); // slow down guessing
     return res.writeHead(401, { "content-type": "text/html; charset=utf-8" }).end(LOGIN_PAGE("That token is not right."));
   }
   const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
   res.writeHead(303, {
     location: "/",
-    "set-cookie": `${COOKIE}=${sessionValue}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
+    "set-cookie": `${COOKIE}=${access.sessionFor(who)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
   });
   res.end();
+}
+
+function logout(req, res) {
+  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  res.writeHead(303, { location: "/login", "set-cookie": `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}` }).end();
 }
 
 const json = (res, status, data) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(data));
@@ -208,6 +224,145 @@ async function runJob(req, res, mock, flaw, job, label) {
   }
 }
 
+/* ---------------- /v1: the @conjure prediction API for products ---------------- */
+
+const DAY = 864e5;
+const recentFor = (product, ms = DAY) => predictions.list({ product }).filter((r) => Date.now() - Date.parse(r.createdAt) < ms);
+
+/** Streams a prediction's updates (server-sent events) until it finishes. */
+function streamPrediction(req, res, rec, full) {
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const send = (v) => !res.writableEnded && res.write(`data: ${JSON.stringify(v)}\n\n`);
+  const done = (s) => s === "done" || s === "failed" || s === "cancelled";
+  send(publicView(rec, { full }));
+  if (done(rec.status)) return res.end();
+  const onUpdate = () => {
+    send(publicView(rec, { full }));
+    if (done(rec.status)) finish();
+  };
+  const ping = setInterval(() => !res.writableEnded && res.write(": ping\n\n"), 15000);
+  const finish = () => {
+    clearInterval(ping);
+    predictions.off(`update:${rec.id}`, onUpdate);
+    res.end();
+  };
+  predictions.on(`update:${rec.id}`, onUpdate);
+  req.on("close", finish);
+}
+
+async function handleV1(req, res, url, who) {
+  // Staff calling /v1 directly (from the dashboard console or curl) act as the "dashboard" product.
+  const product = who.kind === "product" ? who.slug : "dashboard";
+  const own = (rec) => rec && (who.kind === "staff" || rec.product === product);
+  const m = /^\/v1\/predictions(?:\/([\w-]+))?(?:\/(events|interview|cancel))?$/.exec(url.pathname);
+
+  if (req.method === "GET" && url.pathname === "/v1/health") {
+    const live = Boolean(process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1";
+    return json(res, 200, { ok: true, product, live, ...predictions.stats() });
+  }
+  if (!m) return json(res, 404, { error: "not found" });
+  const [, id, action] = m;
+
+  if (!id && req.method === "GET") return json(res, 200, predictions.list({ product: who.kind === "product" ? product : undefined }).slice(0, 100).map((r) => publicView(r)));
+  if (!id && req.method === "POST") {
+    let body;
+    try {
+      body = await readJson(req, 64 * 1024);
+    } catch {
+      return json(res, 400, { error: "invalid JSON" });
+    }
+    if (who.kind === "product" && recentFor(product).length >= (who.dailyLimit ?? 500)) {
+      return json(res, 429, { error: `daily limit of ${who.dailyLimit} forecasts reached for ${product}` });
+    }
+    try {
+      const rec = await predictions.create({ ...body, product, user: body.user, mock: who.kind === "staff" ? body.mock : false });
+      if (who.kind === "product") access.touchProduct(who.record);
+      return json(res, 202, publicView(rec));
+    } catch (err) {
+      if (err instanceof PredictError) return json(res, 400, { error: err.message });
+      throw err;
+    }
+  }
+
+  const rec = predictions.get(id);
+  if (!own(rec)) return json(res, 404, { error: "no such prediction" });
+  if (req.method === "GET" && !action) return json(res, 200, publicView(rec, { full: url.searchParams.get("full") === "1" }));
+  if (req.method === "GET" && action === "events") return streamPrediction(req, res, rec, url.searchParams.get("full") === "1");
+  if (req.method === "POST" && action === "cancel") return json(res, 200, { cancelled: predictions.cancel(rec) });
+  if (req.method === "POST" && action === "interview") {
+    try {
+      const body = await readJson(req);
+      return json(res, 200, { answer: await predictions.ask(rec, body.agentId, body.question) });
+    } catch (err) {
+      if (err instanceof PredictError) return json(res, 400, { error: err.message });
+      if (err instanceof SyntaxError) return json(res, 400, { error: "invalid JSON" });
+      throw err;
+    }
+  }
+  return json(res, 405, { error: "method not allowed" });
+}
+
+/* ---------------- /api/admin: the staff dashboard ---------------- */
+
+function summarize(list) {
+  const finished = list.filter((r) => r.status === "done" || r.status === "failed");
+  const ok = finished.filter((r) => r.status === "done").length;
+  return {
+    total: list.length, done: ok, failed: finished.length - ok,
+    successRate: finished.length ? Math.round((ok / finished.length) * 100) / 100 : null,
+    avgMs: finished.length ? Math.round(finished.reduce((s, r) => s + (r.ms || 0), 0) / finished.length) : null,
+    calls: list.reduce((s, r) => s + (r.sim?.calls || 0), 0),
+  };
+}
+
+async function handleAdmin(req, res, url, who) {
+  const admin = who.role === "admin";
+  const write = req.method === "POST";
+  if (write && !admin) return json(res, 403, { error: "admins only" });
+  let body = {};
+  if (write) {
+    try {
+      body = await readJson(req);
+    } catch {
+      return json(res, 400, { error: "invalid JSON" });
+    }
+  }
+  const p = url.pathname;
+  try {
+    if (req.method === "GET" && p === "/api/admin/overview") {
+      const all = predictions.list();
+      const last24 = all.filter((r) => Date.now() - Date.parse(r.createdAt) < DAY);
+      const products = access.listProducts().map((k) => ({ ...k, day: summarize(recentFor(k.slug)), week: summarize(recentFor(k.slug, 7 * DAY)) }));
+      return json(res, 200, {
+        me: { name: who.name, role: who.role },
+        live: Boolean(process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1",
+        model: process.env.CONJURE_PREDICT_MODEL || process.env.CONJURE_MODEL || "claude-opus-5-5",
+        queue: predictions.stats(), builderBusy: Boolean(current),
+        day: summarize(last24), week: summarize(all.filter((r) => Date.now() - Date.parse(r.createdAt) < 7 * DAY)),
+        products, known: KNOWN_PRODUCTS,
+        staff: admin ? access.listStaff() : undefined,
+        recent: all.slice(0, 50).map((r) => publicView(r)),
+      });
+    }
+    if (req.method === "GET" && p.startsWith("/api/admin/predictions/")) {
+      const rec = predictions.get(p.split("/").pop());
+      return rec ? json(res, 200, publicView(rec, { full: true })) : json(res, 404, { error: "no such prediction" });
+    }
+    if (write && p === "/api/admin/products") return json(res, 201, await access.addProduct(body, who));
+    if (write && p === "/api/admin/staff") return json(res, 201, await access.addStaff(body, who));
+    let mm = /^\/api\/admin\/products\/([\w-]+)\/(rotate|revoke)$/.exec(p);
+    if (write && mm) {
+      if (mm[2] === "rotate") return json(res, 201, await access.rotateProduct(mm[1], who));
+      return json(res, 200, { revoked: await access.revokeProduct(mm[1], who) });
+    }
+    mm = /^\/api\/admin\/staff\/([\w-]+)\/revoke$/.exec(p);
+    if (write && mm) return json(res, 200, { revoked: await access.revokeStaff(mm[1], who) });
+  } catch (err) {
+    return json(res, 400, { error: err.message });
+  }
+  return json(res, 404, { error: "not found" });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   res.setHeader("x-content-type-options", "nosniff");
@@ -224,18 +379,28 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && !sameOrigin(req)) return res.writeHead(403).end("cross-site request refused");
     return handleLogin(req, res);
   }
-  if (!authorized(req)) {
-    if (req.method === "GET" && !url.pathname.startsWith("/api/")) return res.writeHead(303, { location: "/login" }).end();
+  const who = principal(req);
+  const isApi = url.pathname.startsWith("/api/") || url.pathname.startsWith("/v1/");
+  if (!who) {
+    if (req.method === "GET" && !isApi) return res.writeHead(303, { location: "/login" }).end();
     return json(res, 401, { error: "sign in required" });
   }
   if (req.method === "POST") {
     if (!sameOrigin(req)) return res.writeHead(403).end("cross-site request refused");
-    if (url.pathname !== "/api/cancel" && !/^application\/json\b/i.test(req.headers["content-type"] || "")) {
+    if (url.pathname !== "/api/cancel" && url.pathname !== "/logout" && !/^application\/json\b/i.test(req.headers["content-type"] || "")) {
       return res.writeHead(415).end("content-type must be application/json");
     }
   }
+  if (url.pathname.startsWith("/v1/")) return handleV1(req, res, url, who);
+  // Product keys reach only the /v1 API; the dashboard and studio are for staff.
+  if (who.kind !== "staff") return json(res, 403, { error: "product keys can only call /v1" });
+  if (url.pathname === "/logout" && req.method === "POST") return logout(req, res);
+  if (url.pathname.startsWith("/api/admin/")) return handleAdmin(req, res, url, who);
 
-  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
+    return serveFile(res, path.join(PUBLIC, "dashboard.html"));
+  }
+  if (req.method === "GET" && (url.pathname === "/studio" || url.pathname === "/index.html")) {
     return serveFile(res, path.join(PUBLIC, "index.html"));
   }
   if (req.method === "GET" && url.pathname === "/api/status") {

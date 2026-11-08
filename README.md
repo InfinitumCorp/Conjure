@@ -2,6 +2,18 @@
 
 Conjure turns a one-line intent ("a pomodoro timer with a task list") into a small, **working, verified** deliverable: a folder of files that opens and runs. It is built on Claude (`claude-opus-5-5` by default) through the official Anthropic SDK.
 
+## @conjure in Infinitum products
+
+Conjure is not a consumer product. It is the model that runs inside Infinitum products: anyone types **@conjure** and a question (`@conjure will Northwind sign by March?`) and gets a live prediction. A swarm of AI agents plays the question out over a few rounds and a report agent writes the forecast.
+
+- **Engine.** The prediction engine lives in Infinitum Nexus (`@infinitum/conjure`). `node scripts/sync-nexus.mjs` copies it into `src/predict/vendor/`, so this service runs exactly the code products import.
+- **API for products** (`/v1`, product key as `Authorization: Bearer cjp_<product>_…`): `POST /v1/predictions` {question, context, user, source, agents, rounds} → 202; `GET /v1/predictions/:id`; `GET /v1/predictions/:id/events` (live, server-sent events); `POST /v1/predictions/:id/interview`; `POST /v1/predictions/:id/cancel`; `GET /v1/health`. Each product sees only its own forecasts and has a daily limit.
+- **Client.** `client/conjure.mjs` (no dependencies; types in `conjure.d.mts`). Products call `handleMention(text)`; it returns null when there's no @conjure. Nexus products use the same contract from `@infinitum/conjure`.
+- **Staff dashboard** (`/`, private). Sign in with your own staff token. Status, a "Try @conjure" console with live rounds, every forecast across products, product keys (issue, rotate, revoke) and staff (admins add and revoke people). Tokens and keys are stored hashed and shown once. The builder studio moved to `/studio`.
+- **Offline.** Without `ANTHROPIC_API_KEY` forecasts run on a deterministic mock and are labelled "mock".
+
+Data (staff, keys, forecasts, `usage.jsonl`) is kept in `CONJURE_DATA` (default `./conjure-data`; `/var/lib/conjure-data` on AWS), never under the preview folder.
+
 ## How it works
 
 ```
@@ -28,7 +40,7 @@ Runs can be cancelled with Ctrl+C in the CLI or the **Stop** button in the UI; t
 
 ```bash
 npm install
-npm test                                          # 30 tests, offline
+npm test                                          # 44 tests, offline
 node src/cli.js "a habit tracker"                 # build something new
 node src/cli.js refine conjured/<folder> "add dark mode"   # change it
 node src/cli.js zip conjured/<folder>                      # package it as a .zip

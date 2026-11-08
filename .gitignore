@@ -4,3 +4,4 @@ conjured/
 *.zip
 android/build/
 .conjure-access-token
+conjure-data/

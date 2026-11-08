@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conjure Staff</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<style>
+  /* Infinitum build rules (//RULES//): five tokens, Helvetica stack, weight-400 headings, hairline rules. */
+  :root { --paper:#ffffff; --ink:#111820; --muted:#52606b; --line:#d6dce1; --accent:#2454dd; --ease:cubic-bezier(.22,1,.36,1); --gutter:clamp(16px,4vw,48px); color-scheme:light; }
+  *,*::before,*::after { box-sizing:border-box; }
+  body { margin:0; color:var(--ink); background:var(--paper); font-family:'Helvetica Neue',Helvetica,Arial,sans-serif; font-size:16px; line-height:1.55; }
+  button,input,select,textarea { font:inherit; color:inherit; }
+  h1,h2,h3 { font-weight:400; margin:0; }
+  a { color:inherit; } a:hover { color:var(--accent); }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:5px; }
+  .skip-link { position:fixed; top:-100px; left:20px; z-index:1000; background:var(--paper); padding:12px; } .skip-link:focus { top:10px; }
+  sup.tm { font-size:.38em; vertical-align:super; line-height:0; margin-left:.08em; letter-spacing:0; font-weight:400; }
+  .topbar .tm, .foot .tm { font-size:.65em; }
+  .topbar { display:flex; justify-content:space-between; align-items:baseline; gap:16px; padding:18px var(--gutter); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .topbar .brand { font-size:18px; letter-spacing:-.02em; text-decoration:none; }
+  .topbar nav { display:flex; gap:18px; align-items:baseline; font-size:14px; color:var(--muted); flex-wrap:wrap; }
+  .topbar nav a { text-decoration:none; } .topbar form { margin:0; }
+  .linkbtn { background:none; border:0; padding:0; cursor:pointer; color:var(--muted); font-size:14px; text-decoration:underline; text-underline-offset:3px; }
+  .linkbtn:hover { color:var(--accent); }
+  .hero { padding:clamp(40px,7vw,96px) var(--gutter) clamp(28px,4vw,56px); border-bottom:1px solid var(--line); }
+  .hero h1 { font-size:clamp(68px,10vw,158px); line-height:.98; letter-spacing:-.065em; animation:rise .9s var(--ease) both; }
+  .hero p { max-width:36em; margin:22px 0 0; font-size:clamp(18px,1.6vw,22px); color:var(--muted); letter-spacing:-.01em; animation:rise .9s .08s var(--ease) both; }
+  @keyframes rise { from { opacity:0; transform:translateY(18px); } to { opacity:1; transform:none; } }
+  section.block { padding:clamp(28px,3.5vw,48px) var(--gutter); border-bottom:1px solid var(--line); display:flex; flex-direction:column; gap:20px; }
+  h2 { font-size:clamp(30px,3.2vw,44px); line-height:1.05; letter-spacing:-.055em; }
+  h3 { font-size:22px; letter-spacing:-.04em; line-height:1.2; }
+  .lede { color:var(--muted); max-width:44em; margin:0; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); border-top:1px solid var(--line); }
+  .stat { padding:16px 16px 16px 0; border-bottom:1px solid var(--line); }
+  .stat .k { font-size:13px; color:var(--muted); }
+  .stat .v { font-size:clamp(26px,2.6vw,36px); letter-spacing:-.05em; line-height:1.15; font-variant-numeric:tabular-nums; }
+  .label { font-size:13px; color:var(--muted); }
+  textarea,input[type=text],input[type=email],input[type=number],select { width:100%; padding:14px; border:1px solid var(--ink); border-radius:0; background:var(--paper); }
+  textarea { min-height:96px; resize:vertical; font-size:18px; letter-spacing:-.01em; }
+  textarea.small { min-height:72px; font-size:15px; }
+  textarea:focus,input:focus,select:focus { border-color:var(--accent); outline:none; }
+  .grid2 { display:grid; grid-template-columns:3fr 2fr; gap:clamp(20px,3vw,48px); align-items:start; }
+  .row { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
+  .row > label { display:flex; flex-direction:column; gap:6px; }
+  .row input[type=number] { width:96px; }
+  label.check { font-size:14px; color:var(--muted); display:inline-flex; gap:8px; align-items:center; cursor:pointer; }
+  label.check input { accent-color:var(--ink); width:16px; height:16px; margin:0; }
+  .btn-primary,.btn-secondary { display:inline-block; border-radius:0; cursor:pointer; text-decoration:none; transition:background .2s,color .2s,border-color .2s; font-size:16px; line-height:1.2; }
+  .btn-primary { background:var(--ink); color:#fff; border:1px solid var(--ink); padding:15px 22px; }
+  .btn-primary:hover:not(:disabled) { background:var(--accent); border-color:var(--accent); }
+  .btn-secondary { background:var(--paper); color:var(--ink); border:1px solid var(--ink); padding:9px 14px; font-size:14px; }
+  .btn-secondary:hover:not(:disabled) { background:var(--ink); color:#fff; }
+  button:disabled { opacity:.35; cursor:not-allowed; }
+  .table-wrap { overflow-x:auto; border-top:1px solid var(--line); }
+  table { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
+  th { text-align:left; font-weight:400; color:var(--muted); font-size:13px; padding:12px 12px 12px 0; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td { padding:12px 12px 12px 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  td.q { max-width:420px; } td .sub { color:var(--muted); font-size:12px; }
+  tr.click { cursor:pointer; } tr.click:hover td:nth-child(3) { color:var(--accent); }
+  tr.sel td { box-shadow:inset 0 -2px 0 var(--accent); }
+  .tag { font-size:12px; color:var(--muted); white-space:nowrap; } .tag.bad { color:var(--ink); font-weight:700; }
+  .out { border-top:1px solid var(--ink); padding-top:18px; display:flex; flex-direction:column; gap:12px; }
+  .out pre { margin:0; white-space:pre-wrap; font-family:inherit; font-size:16px; }
+  .bar { height:6px; background:var(--line); position:relative; } .bar > span { position:absolute; inset:0 auto 0 0; background:var(--ink); transition:width .4s var(--ease); }
+  .split { display:flex; height:10px; border:1px solid var(--line); } .split span:nth-child(1){background:var(--ink)} .split span:nth-child(2){background:var(--line)} .split span:nth-child(3){background:var(--muted)}
+  .trend { display:grid; gap:6px; font-size:13px; color:var(--muted); }
+  .trend .r { display:grid; grid-template-columns:70px 1fr 54px; gap:10px; align-items:center; }
+  .secret { border:1px solid var(--accent); padding:16px; display:none; flex-direction:column; gap:10px; } .secret.on { display:flex; }
+  .secret code { font-family:ui-monospace,Consolas,monospace; font-size:14px; word-break:break-all; }
+  ul.plain { margin:0; padding-left:20px; color:var(--muted); font-size:15px; }
+  pre.code { margin:0; padding:16px; border:1px solid var(--line); overflow-x:auto; font-family:ui-monospace,Consolas,monospace; font-size:13px; line-height:1.6; }
+  .empty { color:var(--muted); font-size:14px; padding:14px 0; }
+  .err { color:var(--ink); font-weight:700; }
+  .foot { display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:22px var(--gutter); font-size:13px; color:var(--muted); }
+  .motion-paused *,.motion-paused *::after { animation:none !important; transition:none !important; }
+  @media (prefers-reduced-motion: reduce) { *,*::after { animation:none !important; transition:none !important; } }
+  @media (max-width:900px) { .grid2 { grid-template-columns:1fr; } }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to the dashboard</a>
+<header class="topbar">
+  <a class="brand" href="/">Conjure<sup class="tm">™</sup> · Staff</a>
+  <nav aria-label="Account">
+    <span id="me">Signing in…</span>
+    <a href="#forecasts">Forecasts</a>
+    <a href="#products">Products</a>
+    <a href="#staff" id="staffLink" hidden>Staff</a>
+    <a href="/studio">Studio</a>
+    <form method="post" action="/logout" id="logoutForm" hidden><button class="linkbtn">Sign out</button></form>
+  </nav>
+</header>
+<section class="hero" aria-labelledby="hero-title">
+  <h1 id="hero-title">Conjure<sup class="tm">™</sup></h1>
+  <p>Live prediction inside every Infinitum product. Anyone types <strong>@conjure</strong> and a question; a swarm of AI agents plays it out and a report agent writes the forecast. This dashboard is private to Infinitum staff.</p>
+</section>
+<main id="main">
+  <section class="block" aria-labelledby="status-title">
+    <h2 id="status-title">Status</h2>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <section class="block" aria-labelledby="try-title">
+    <h2 id="try-title">Try @conjure</h2>
+    <p class="lede">Runs exactly what a product runs when someone mentions @conjure. Forecasts made here are logged under the product “dashboard”.</p>
+    <div class="grid2">
+      <form id="tryForm" style="display:flex;flex-direction:column;gap:14px">
+        <label class="label" for="mention">Message with a mention</label>
+        <textarea id="mention" required>@conjure will Cumulus://Mail reach 10,000 active mailboxes by the end of Q1?</textarea>
+        <label class="label" for="ctx">Context the product would pass (record, thread, notes). Optional.</label>
+        <textarea id="ctx" class="small" placeholder="Paste background: deal notes, a news story, a report."></textarea>
+        <div class="row">
+          <label class="label">Agents<input type="number" id="agents" min="4" max="60" value="16"></label>
+          <label class="label">Rounds<input type="number" id="rounds" min="1" max="8" value="3"></label>
+          <label class="check"><input type="checkbox" id="mock"> Offline (mock)</label>
+          <button class="btn-primary" id="run">Run forecast</button>
+        </div>
+      </form>
+      <div class="out" id="tryOut" aria-live="polite"><p class="empty">The forecast appears here, round by round.</p></div>
+    </div>
+  </section>
+
+  <section class="block" id="forecasts" aria-labelledby="fc-title">
+    <h2 id="fc-title">Forecasts</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>When</th><th>Product</th><th>Question</th><th>Status</th><th>Forecast</th><th>Rounds</th><th>Time</th></tr></thead>
+      <tbody id="recent"></tbody>
+    </table></div>
+    <div class="out" id="detail" hidden></div>
+  </section>
+
+  <section class="block" id="products" aria-labelledby="pr-title">
+    <h2 id="pr-title">Products</h2>
+    <p class="lede">Each product calls Conjure with its own key, from its server. Keys are shown once; rotate one if it leaks.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Product</th><th>Key</th><th>Created</th><th>Last used</th><th>24 h</th><th>7 days</th><th>Daily limit</th><th></th></tr></thead>
+      <tbody id="productRows"></tbody>
+    </table></div>
+    <form class="row" id="productForm" hidden>
+      <label class="label">Product<select id="pSlug"></select></label>
+      <label class="label">Daily limit<input type="number" id="pLimit" min="1" value="500"></label>
+      <button class="btn-primary">Issue key</button>
+    </form>
+    <div class="secret" id="productSecret" role="status"></div>
+  </section>
+
+  <section class="block" id="staff" aria-labelledby="st-title" hidden>
+    <h2 id="st-title">Staff</h2>
+    <p class="lede">Every person gets their own token. Revoking one signs that person out everywhere.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Token</th><th>Added</th><th></th></tr></thead>
+      <tbody id="staffRows"></tbody>
+    </table></div>
+    <form class="row" id="staffForm">
+      <label class="label">Name<input type="text" id="sName" required></label>
+      <label class="label">Email<input type="email" id="sEmail"></label>
+      <label class="label">Role<select id="sRole"><option value="staff">Staff (view, try)</option><option value="admin">Admin (keys, staff)</option></select></label>
+      <button class="btn-primary">Add staff</button>
+    </form>
+    <div class="secret" id="staffSecret" role="status"></div>
+  </section>
+
+  <section class="block" aria-labelledby="int-title">
+    <h2 id="int-title">Add @conjure to a product</h2>
+    <ul class="plain">
+      <li>Copy <code>client/conjure.mjs</code> (no dependencies) into the product's server code.</li>
+      <li>Set <code>CONJURE_URL</code> and <code>CONJURE_PRODUCT_KEY</code> in the product's server environment. Never ship the key to a browser.</li>
+      <li>Pass every message, comment or note through <code>handleMention</code>. It returns null when there is no @conjure.</li>
+    </ul>
+<pre class="code">import { conjureFromEnv } from "./conjure.mjs";
+const conjure = conjureFromEnv();
+
+const result = await conjure?.handleMention(message.text, { context: record.notes, user: user.id, source: "deal" });
+if (result) await postReply(result.text);</pre>
+  </section>
+</main>
+<footer class="foot">
+  <span>Conjure<sup class="tm">™</sup> · Infinitum Corporation · Staff only</span>
+  <button type="button" class="linkbtn" id="motion" aria-pressed="false">Pause motion</button>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const when = (iso) => { if (!iso) return "—"; const d = new Date(iso), s = (Date.now() - d) / 1000; return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : d.toLocaleDateString(); };
+const secs = (ms) => (ms == null ? "—" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`);
+const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+let data = null, selected = null;
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { "content-type": "application/json", ...(opts.headers || {}) } });
+  if (res.status === 401) { location.href = "/login"; throw new Error("signed out"); }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}
+
+function stat(k, v) { return `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`; }
+
+function render() {
+  const d = data;
+  $("me").textContent = `${d.me.name} · ${d.me.role === "admin" ? "Admin" : "Staff"}`;
+  $("logoutForm").hidden = d.me.name === "Local";
+  const admin = d.me.role === "admin";
+  $("staff").hidden = $("staffLink").hidden = !admin;
+  $("productForm").hidden = !admin;
+  $("stats").innerHTML = [
+    stat("Mode", d.live ? "Live" : "Offline mock"), stat("Model", d.live ? d.model : "mock"),
+    stat("Running", `${d.queue.running} of ${d.queue.concurrency}`), stat("Queued", d.queue.queued),
+    stat("Forecasts, 24 h", d.day.total), stat("Succeeded, 24 h", pct(d.day.successRate)),
+    stat("Average time", secs(d.day.avgMs)), stat("Products live", d.products.filter((p) => !p.revokedAt).length),
+  ].join("");
+
+  $("recent").innerHTML = d.recent.length ? d.recent.map((r) => `<tr class="click${r.id === selected ? " sel" : ""}" tabindex="0" data-id="${esc(r.id)}">
+    <td>${esc(when(r.createdAt))}</td><td>${esc(r.product)}</td><td class="q">${esc(r.question)}${r.user ? `<div class="sub">${esc(r.user)}${r.source ? ` · ${esc(r.source)}` : ""}</div>` : ""}</td>
+    <td><span class="tag${r.status === "failed" ? " bad" : ""}">${esc(r.status)}${r.mode === "mock" ? " · mock" : ""}</span></td>
+    <td>${r.report ? `${pct(r.report.probability)} <span class="sub">${esc(r.report.confidence)}</span>` : "—"}</td>
+    <td>${r.round}/${r.rounds}</td><td>${esc(r.finishedAt ? secs(Date.parse(r.finishedAt) - Date.parse(r.startedAt || r.createdAt)) : "…")}</td></tr>`).join("")
+    : `<tr><td colspan="7" class="empty">No forecasts yet. Try one above, or mention @conjure in a product.</td></tr>`;
+
+  const live = d.products.filter((p) => !p.revokedAt);
+  $("productRows").innerHTML = d.products.length ? d.products.slice().sort((a, b) => (a.revokedAt ? 1 : 0) - (b.revokedAt ? 1 : 0) || a.slug.localeCompare(b.slug)).map((p) => `<tr>
+    <td>${esc(p.name)}<div class="sub">${esc(p.slug)}</div></td><td><code>${esc(p.prefix)}…</code>${p.revokedAt ? `<div class="sub">revoked ${esc(when(p.revokedAt))}</div>` : ""}</td>
+    <td>${esc(when(p.createdAt))}</td><td>${esc(when(p.lastUsedAt))}</td>
+    <td>${p.day.total}${p.day.failed ? ` <span class="sub">${p.day.failed} failed</span>` : ""}</td><td>${p.week.total}</td><td>${p.dailyLimit}</td>
+    <td>${admin && !p.revokedAt ? `<button class="btn-secondary" data-rotate="${esc(p.id)}">Rotate</button> <button class="btn-secondary" data-revoke="${esc(p.id)}">Revoke</button>` : ""}</td></tr>`).join("")
+    : `<tr><td colspan="8" class="empty">No product keys yet.${admin ? " Issue one below." : ""}</td></tr>`;
+  const used = new Set(live.map((p) => p.slug));
+  const opts = Object.entries(d.known).filter(([slug]) => !used.has(slug)).map(([slug, name]) => `<option value="${esc(slug)}">${esc(name)} (${esc(slug)})</option>`);
+  if ($("pSlug").dataset.n !== String(opts.length)) { $("pSlug").innerHTML = opts.join("") || `<option value="">Every product has a key</option>`; $("pSlug").dataset.n = String(opts.length); }
+
+  if (admin) {
+    $("staffRows").innerHTML = (d.staff || []).length ? d.staff.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.email || "—")}</td><td>${esc(s.role)}</td>
+      <td><code>${esc(s.prefix)}…</code>${s.revokedAt ? `<div class="sub">revoked</div>` : ""}</td><td>${esc(when(s.createdAt))}</td>
+      <td>${s.revokedAt ? "" : `<button class="btn-secondary" data-unstaff="${esc(s.id)}">Revoke</button>`}</td></tr>`).join("")
+      : `<tr><td colspan="6" class="empty">Only the owner token so far. Add each staff member so access can be revoked one person at a time.</td></tr>`;
+  }
+}
+
+async function refresh() {
+  try { data = await api("/api/admin/overview"); render(); } catch (e) { if (e.message !== "signed out") $("stats").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+
+function forecastHtml(v) {
+  const r = v.report;
+  const last = v.stats.at(-1);
+  const head = `<h3>${esc(v.question)}</h3><div class="sub label">${esc(v.product)} · ${esc(v.status)}${v.mode === "mock" ? " · offline mock" : ""} · ${v.agents} agents · round ${v.round} of ${v.rounds}</div>
+    <div class="bar" aria-hidden="true"><span style="width:${Math.round(((v.round + (r ? 1 : 0)) / (v.rounds + 1)) * 100)}%"></span></div>`;
+  const trend = v.stats.length > 1 ? `<div class="trend" aria-label="Stance by round">${v.stats.map((s) => `<div class="r"><span>Round ${s.round}</span>
+    <div class="split" title="for ${pct(s.split.for)}, undecided ${pct(s.split.undecided)}, against ${pct(s.split.against)}"><span style="width:${s.split.for * 100}%"></span><span style="width:${s.split.undecided * 100}%"></span><span style="width:${s.split.against * 100}%"></span></div>
+    <span>${pct(s.split.for)} for</span></div>`).join("")}</div>` : "";
+  if (v.status === "failed") return `${head}<p class="err">${esc(v.error)}</p>`;
+  if (!r) return `${head}${trend}<p class="label">${v.status === "queued" ? "Waiting for a free slot…" : v.round ? `Agents are acting: ${last ? pct(last.split.for) : "—"} lean “${esc(v.poles?.for)}”.` : "Mapping who is involved and creating agents…"}</p>`;
+  return `${head}<p style="font-size:clamp(22px,2vw,28px);letter-spacing:-.03em;line-height:1.25;margin:0">${esc(r.outcome)}</p>
+    <p class="label" style="margin:0">${pct(r.probability)} likely that ${esc(v.poles?.for || "it happens")} · ${esc(r.confidence)} confidence</p>
+    ${trend}<p style="margin:0">${esc(r.forecast)}</p>
+    ${r.drivers?.length ? `<div><div class="label">Drivers</div><ul class="plain">${r.drivers.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+    ${r.signals?.length ? `<div><div class="label">Signals to watch</div><ul class="plain">${r.signals.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+    <p class="label" style="margin:0">A simulation is evidence, not proof.</p>`;
+}
+
+// --- Try @conjure: parse the mention like a product does, then follow the run live.
+function parseMention(text) {
+  const m = /(^|[^\w@./])@conjure(?![\w-]|\.[a-z])/i.exec(text);
+  if (!m) return null;
+  const at = m.index + m[1].length;
+  const after = text.slice(at + 8).replace(/^[\s:,\-–—]+/, "").trim(), before = text.slice(0, at).trim();
+  return { question: (after || before).replace(/\s+/g, " ").slice(0, 500), context: after && before ? before : "" };
+}
+
+let stream = null;
+$("tryForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const m = parseMention($("mention").value);
+  if (!m || !m.question) { $("tryOut").innerHTML = `<p class="err">Write @conjure and a question, e.g. “@conjure will we hit plan this quarter?”</p>`; return; }
+  $("run").disabled = true;
+  try {
+    const started = await api("/v1/predictions", { method: "POST", body: JSON.stringify({ question: m.question, context: [m.context, $("ctx").value.trim()].filter(Boolean).join("\n\n"), agents: +$("agents").value, rounds: +$("rounds").value, mock: $("mock").checked, source: "dashboard", user: data?.me.name }) });
+    stream?.close();
+    stream = new EventSource(`/v1/predictions/${encodeURIComponent(started.id)}/events`);
+    stream.onmessage = (ev) => {
+      const v = JSON.parse(ev.data);
+      $("tryOut").innerHTML = forecastHtml(v);
+      if (["done", "failed", "cancelled"].includes(v.status)) { stream.close(); $("run").disabled = false; refresh(); }
+    };
+    stream.onerror = () => { stream.close(); $("run").disabled = false; };
+    refresh();
+  } catch (err) { $("tryOut").innerHTML = `<p class="err">${esc(err.message)}</p>`; $("run").disabled = false; }
+});
+
+async function showDetail(id) {
+  selected = id; render();
+  const v = await api(`/api/admin/predictions/${encodeURIComponent(id)}`);
+  const people = (v.personas || []).slice().sort((a, b) => b.influence - a.influence).slice(0, 8);
+  $("detail").hidden = false;
+  $("detail").innerHTML = forecastHtml(v) + (people.length ? `<div><div class="label">Most influential agents</div><ul class="plain">${people.map((p) => `<li>${esc(p.name)}, ${esc(p.role)} · stance ${p.stance.toFixed(2)}</li>`).join("")}</ul></div>` : "");
+  $("detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+$("recent").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) showDetail(tr.dataset.id); });
+$("recent").addEventListener("keydown", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showDetail(tr.dataset.id); } });
+
+function showSecret(box, title, secret, note) {
+  box.classList.add("on");
+  box.innerHTML = `<strong>${esc(title)}</strong><code id="${box.id}Val">${esc(secret)}</code><span class="label">${esc(note)}</span>
+    <div class="row"><button type="button" class="btn-secondary" data-copy="${box.id}Val">Copy</button><button type="button" class="btn-secondary" data-hide="${box.id}">I've stored it</button></div>`;
+}
+document.addEventListener("click", async (e) => {
+  const t = e.target;
+  try {
+    if (t.dataset.copy) { await navigator.clipboard.writeText($(t.dataset.copy).textContent); t.textContent = "Copied"; }
+    if (t.dataset.hide) { $(t.dataset.hide).classList.remove("on"); $(t.dataset.hide).innerHTML = ""; }
+    if (t.dataset.rotate && confirm("Rotate this key? The old key stops working now.")) {
+      const r = await api(`/api/admin/products/${t.dataset.rotate}/rotate`, { method: "POST", body: "{}" });
+      showSecret($("productSecret"), `New key for ${r.product.name}`, r.key, "Shown once. Put it in the product's server environment as CONJURE_PRODUCT_KEY."); refresh();
+    }
+    if (t.dataset.revoke && confirm("Revoke this key? The product loses @conjure until it gets a new key.")) { await api(`/api/admin/products/${t.dataset.revoke}/revoke`, { method: "POST", body: "{}" }); refresh(); }
+    if (t.dataset.unstaff && confirm("Revoke this person's access?")) { await api(`/api/admin/staff/${t.dataset.unstaff}/revoke`, { method: "POST", body: "{}" }); refresh(); }
+  } catch (err) { alert(err.message); }
+});
+$("productForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!$("pSlug").value) return;
+  try {
+    const r = await api("/api/admin/products", { method: "POST", body: JSON.stringify({ slug: $("pSlug").value, name: data.known[$("pSlug").value], dailyLimit: +$("pLimit").value }) });
+    showSecret($("productSecret"), `Key for ${r.product.name}`, r.key, "Shown once. Put it in the product's server environment as CONJURE_PRODUCT_KEY, with CONJURE_URL set to this server."); refresh();
+  } catch (err) { alert(err.message); }
+});
+$("staffForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const r = await api("/api/admin/staff", { method: "POST", body: JSON.stringify({ name: $("sName").value, email: $("sEmail").value, role: $("sRole").value }) });
+    showSecret($("staffSecret"), `Sign-in token for ${r.staff.name}`, r.token, "Shown once. Give it to them privately; they sign in with it on this server.");
+    $("staffForm").reset(); refresh();
+  } catch (err) { alert(err.message); }
+});
+
+const MKEY = "conjure-motion";
+function setMotion(paused) { document.documentElement.classList.toggle("motion-paused", paused); $("motion").setAttribute("aria-pressed", String(paused)); $("motion").textContent = paused ? "Play motion" : "Pause motion"; try { localStorage.setItem(MKEY, paused ? "paused" : "on"); } catch {} }
+try { setMotion(localStorage.getItem(MKEY) === "paused"); } catch {}
+$("motion").addEventListener("click", () => setMotion($("motion").getAttribute("aria-pressed") !== "true"));
+
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 10000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+</script>
+</body>
+</html>

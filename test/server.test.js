@@ -17,7 +17,7 @@ async function startServer(extraEnv = {}) {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "conjure-srv-"));
   const child = spawn(process.execPath, ["src/server.js"], {
     cwd: root,
-    env: { ...process.env, ANTHROPIC_API_KEY: "", CONJURE_MOCK: "1", PORT: String(port), PREVIEW_PORT: String(port + 1), CONJURE_OUT: out, ...extraEnv },
+    env: { ...process.env, ANTHROPIC_API_KEY: "", CONJURE_MOCK: "1", PORT: String(port), PREVIEW_PORT: String(port + 1), CONJURE_OUT: out, CONJURE_DATA: path.join(out, "..", path.basename(out) + "-data"), ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let log = "";

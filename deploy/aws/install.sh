@@ -4,7 +4,7 @@
 #
 #   install.sh <s3-bucket> <s3-key> <app-host> <preview-host> <region>
 #
-# Layout: /opt/conjure/releases/<id> (code, "current" symlink), /var/lib/conjure (deliverables),
+# Layout: /opt/conjure/releases/<id> (code, "current" symlink), /var/lib/conjure (deliverables), /var/lib/conjure-data (staff, product keys, forecasts),
 # /etc/conjure/env (secrets from SSM Parameter Store, root-only).
 set -euo pipefail
 BUCKET="$1"; KEY="$2"; APP_HOST="$3"; PREVIEW_HOST="$4"; REGION="$5"
@@ -45,6 +45,7 @@ fi
 id conjure >/dev/null 2>&1 || useradd --system --home-dir /var/lib/conjure --shell /sbin/nologin conjure
 id caddy   >/dev/null 2>&1 || useradd --system --home-dir /var/lib/caddy   --shell /sbin/nologin caddy
 install -d -o conjure -g conjure -m 0750 /var/lib/conjure
+install -d -o conjure -g conjure -m 0700 /var/lib/conjure-data
 install -d -o caddy -g caddy -m 0750 /var/lib/caddy
 install -d -m 0755 /opt/conjure/releases /etc/caddy
 install -d -m 0700 /etc/conjure
@@ -86,14 +87,14 @@ Group=conjure
 WorkingDirectory=/opt/conjure/current
 EnvironmentFile=/etc/conjure/env
 Environment=NODE_ENV=production HOST=127.0.0.1 PORT=4317 PREVIEW_PORT=4318
-Environment=CONJURE_OUT=/var/lib/conjure PREVIEW_ORIGIN=https://$PREVIEW_HOST
+Environment=CONJURE_OUT=/var/lib/conjure CONJURE_DATA=/var/lib/conjure-data PREVIEW_ORIGIN=https://$PREVIEW_HOST
 ExecStart=/usr/local/bin/node src/server.js
 Restart=always
 RestartSec=2
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/conjure
+ReadWritePaths=/var/lib/conjure /var/lib/conjure-data
 PrivateTmp=true
 
 [Install]
