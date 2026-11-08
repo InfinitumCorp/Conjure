@@ -74,6 +74,14 @@ umask 077
 } > /etc/conjure/env
 umask 022
 
+# --- Model: without an Anthropic key, run a free open-source model locally (Ollama) ---
+if [ -z "$API_KEY" ] || [ "$API_KEY" = "None" ] || [ "$API_KEY" = "unset" ]; then
+  LLM_MODEL="$(param /conjure/llm-model)"
+  if [ -z "$LLM_MODEL" ] || [ "$LLM_MODEL" = "None" ]; then LLM_MODEL=qwen2.5:1.5b; fi
+  log "installing the open-source model backend ($LLM_MODEL)"
+  CONJURE_LLM_MODEL="$LLM_MODEL" CONJURE_SKIP_RESTART=1 bash "$RELEASE/deploy/aws/install-ollama.sh"
+fi
+
 # --- Services ---
 cat > /etc/systemd/system/conjure.service <<EOF
 [Unit]

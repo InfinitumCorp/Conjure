@@ -7,15 +7,23 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { createSimulation, step, writeReport, interview, estimateCalls, claudeComplete, ConjureError } from "./vendor/conjure.ts";
 import { mockComplete, mockReportFetch } from "./mock.js";
+import { openaiComplete, openaiAsAnthropicFetch } from "./openai.js";
 
 const MAX_QUESTION = 500;
 const MAX_CONTEXT = 30000;
 
 function modelSetup({ mock, delayMs }) {
   const apiKey = process.env.ANTHROPIC_API_KEY || "";
-  const useMock = mock || process.env.CONJURE_MOCK === "1" || !apiKey;
-  const model = process.env.CONJURE_PREDICT_MODEL || process.env.CONJURE_MODEL || "claude-opus-5-5";
+  const openUrl = (process.env.CONJURE_LLM_URL || "").replace(/\/+$/, "");
+  const useMock = mock || process.env.CONJURE_MOCK === "1" || (!apiKey && !openUrl);
   if (useMock) return { mode: "mock", model: "mock", complete: mockComplete({ delayMs }), llm: { apiKey: "mock", model: "mock", fetchImpl: mockReportFetch() } };
+  if (openUrl) {
+    // An open-source model on an OpenAI-compatible server (Ollama by default) takes precedence.
+    const model = process.env.CONJURE_LLM_MODEL || "qwen2.5:3b";
+    const cfg = { baseUrl: openUrl, model, apiKey: process.env.CONJURE_LLM_KEY || "" };
+    return { mode: "live", model, complete: openaiComplete(cfg), llm: { apiKey: "open", model, maxTokens: 3000, fetchImpl: openaiAsAnthropicFetch(cfg) } };
+  }
+  const model = process.env.CONJURE_PREDICT_MODEL || process.env.CONJURE_MODEL || "claude-opus-5-5";
   return { mode: "live", model, complete: claudeComplete({ apiKey, model }), llm: { apiKey, model, maxTokens: 3000 } };
 }
 
