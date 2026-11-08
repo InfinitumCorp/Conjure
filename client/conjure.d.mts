@@ -61,4 +61,9 @@ export interface ConjureClient {
 }
 
 export declare function createConjure(options: { url: string; key: string; fetch?: typeof fetch; timeoutMs?: number; pollMs?: number }): ConjureClient;
+export type ConjureRouteHandler = (request: Request, who: { user?: string | null; context?: string }) => Promise<Response | null>;
+export declare function createConjureRoutes(options: { conjure: ConjureClient | null; secret: string; prefix?: string; source?: string }): ConjureRouteHandler;
+export declare function toWebRequest(req: AsyncIterable<Uint8Array> & { method?: string; url?: string; headers: Record<string, string | string[] | undefined> }, base?: string): Promise<Request>;
+export declare function sendWebResponse(res: { writeHead(status: number, headers: Record<string, string>): unknown; end(body: Uint8Array): unknown }, response: Response): Promise<void>;
 export declare function conjureFromEnv(env?: Record<string, string | undefined>): ConjureClient | null;
+export declare function conjureRoutesFromEnv(env?: Record<string, string | undefined>, options?: { prefix?: string; source?: string }): ConjureRouteHandler;

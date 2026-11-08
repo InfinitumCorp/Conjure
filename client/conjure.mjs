@@ -144,7 +144,100 @@ export function createConjure({ url, key, fetch: fetchImpl = globalThis.fetch, t
   return api;
 }
 
+/* ---------------- Drop-in routes for a product's server ---------------- */
+
+const enc = new TextEncoder();
+const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+async function mac(secret, text) {
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return b64url(await crypto.subtle.sign("HMAC", key, enc.encode(text))).slice(0, 32);
+}
+
+function sameText(a, b) {
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+
+const reply = (status, data) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+
+/**
+ * Standard @conjure routes for any product, on web-standard Request/Response
+ * (Cloudflare Workers, Hono via c.req.raw, Deno, Bun; Node via toWebRequest below).
+ *
+ *   POST {prefix}            { text, context?, source? }  → { mention: false } or { text, ticket, prediction }
+ *   GET  {prefix}/{ticket}                                → { text, prediction }   (follow it live)
+ *
+ * Call it AFTER the product's own sign-in, passing who is signed in. Tickets are signed with
+ * `secret` and bound to that person, so only they can follow their forecast, on any instance.
+ * Returns null for paths it doesn't own, so it chains with the product's router.
+ */
+export function createConjureRoutes({ conjure, secret, prefix = "/api/conjure", source: defaultSource } = {}) {
+  if (!secret) throw new Error("createConjureRoutes: secret is required (e.g. CONJURE_PRODUCT_KEY)");
+  return async function handle(request, { user, context: extraContext } = {}) {
+    const url = new URL(request.url);
+    if (url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`)) return null;
+    if (!user) return reply(401, { error: "sign in required" });
+    if (!conjure) return reply(503, { error: "Conjure isn't connected. Set CONJURE_URL and CONJURE_PRODUCT_KEY." });
+    const owner = String(user);
+    try {
+      if (request.method === "POST" && url.pathname === prefix) {
+        if (!/^application\/json\b/i.test(request.headers.get("content-type") || "")) return reply(415, { error: "send JSON" });
+        const body = await request.json().catch(() => null);
+        if (!body || typeof body.text !== "string" || body.text.length > 32000) return reply(400, { error: "text is required" });
+        const context = [typeof body.context === "string" ? body.context : "", extraContext || ""].filter(Boolean).join("\n\n").slice(0, 30000);
+        const source = typeof body.source === "string" ? body.source.slice(0, 60) : defaultSource;
+        const out = await conjure.handleMention(body.text, { context, user: owner, source, wait: false });
+        if (!out) return reply(200, { mention: false });
+        const ticket = out.prediction ? `${out.prediction.id}.${await mac(secret, `${out.prediction.id}|${owner}`)}` : null;
+        return reply(200, { mention: true, text: out.text, ticket, prediction: out.prediction });
+      }
+      const m = /^\/([\w-]+)\.([\w-]+)$/.exec(url.pathname.slice(prefix.length));
+      if (request.method === "GET" && m) {
+        if (!sameText(m[2], await mac(secret, `${m[1]}|${owner}`))) return reply(404, { error: "no such forecast" });
+        const prediction = await conjure.get(m[1]);
+        return reply(200, { text: formatForecast(prediction), prediction });
+      }
+      return reply(404, { error: "not found" });
+    } catch (err) {
+      if (err instanceof ConjureApiError) return reply(err.status === 429 ? 429 : 502, { error: err.message });
+      throw err;
+    }
+  };
+}
+
+/** Node http adapter: turns an IncomingMessage into a Request for createConjureRoutes. */
+export async function toWebRequest(req, base = "http://localhost") {
+  let body;
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    const chunks = [];
+    let size = 0;
+    for await (const c of req) {
+      size += c.length;
+      if (size > 64 * 1024) throw new Error("body too large");
+      chunks.push(c);
+    }
+    body = Buffer.concat(chunks);
+  }
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) if (v !== undefined) headers.set(k, Array.isArray(v) ? v.join(", ") : String(v));
+  return new Request(new URL(req.url, base), { method: req.method, headers, body });
+}
+
+/** Node http adapter: writes a Response to a ServerResponse. */
+export async function sendWebResponse(res, response) {
+  res.writeHead(response.status, Object.fromEntries(response.headers));
+  res.end(Buffer.from(await response.arrayBuffer()));
+}
+
 /** Builds a client from CONJURE_URL and CONJURE_PRODUCT_KEY; null when either is missing. */
 export function conjureFromEnv(env = globalThis.process?.env ?? {}) {
   return env.CONJURE_URL && env.CONJURE_PRODUCT_KEY ? createConjure({ url: env.CONJURE_URL, key: env.CONJURE_PRODUCT_KEY }) : null;
+}
+
+/** createConjureRoutes from CONJURE_URL + CONJURE_PRODUCT_KEY. Answers 503 until both are set. */
+export function conjureRoutesFromEnv(env = globalThis.process?.env ?? {}, options = {}) {
+  return createConjureRoutes({ conjure: conjureFromEnv(env), secret: env.CONJURE_PRODUCT_KEY || "conjure-not-configured", ...options });
 }

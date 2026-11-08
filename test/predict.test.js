@@ -155,3 +155,43 @@ describe("prediction service with staff sign-in", () => {
     assert.equal(events.at(-1).product, "dashboard");
   });
 });
+
+describe("drop-in @conjure routes for products", async () => {
+  const { createConjureRoutes } = await import("../client/conjure.mjs");
+  let s, key, handle;
+  before(async () => {
+    s = await startServer({ CONJURE_ACCESS_TOKEN: OWNER, CONJURE_MOCK_DELAY: "1" });
+    key = (await (await fetch(`${s.base}/api/admin/products`, { method: "POST", headers: auth(OWNER), body: JSON.stringify({ slug: "hrvst" }) })).json()).key;
+    handle = createConjureRoutes({ conjure: createConjure({ url: s.base, key, pollMs: 20 }), secret: key });
+  });
+  after(() => s.stop());
+  const post = (body) => new Request("https://product.test/api/conjure", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  test("ignores other paths and needs a signed-in user", async () => {
+    assert.equal(await handle(new Request("https://product.test/api/other"), { user: "u1" }), null);
+    assert.equal((await handle(post({ text: "@conjure x?" }), {})).status, 401);
+  });
+
+  test("no mention is a no-op; a mention starts a forecast only its asker can follow", async () => {
+    assert.deepEqual(await (await handle(post({ text: "hello" }), { user: "u1" })).json(), { mention: false });
+    const r = await (await handle(post({ text: "@conjure will the pilot convert?", source: "note" }), { user: "u1" })).json();
+    assert.equal(r.mention, true);
+    assert.match(r.ticket, /^pr_[\w-]+\.[\w-]+$/);
+    assert.equal(r.prediction.product, "hrvst");
+    let follow;
+    for (let i = 0; i < 100; i++) {
+      follow = await (await handle(new Request(`https://product.test/api/conjure/${r.ticket}`), { user: "u1" })).json();
+      if (follow.prediction.status === "done") break;
+      await new Promise((res) => setTimeout(res, 30));
+    }
+    assert.match(follow.text, /Conjure™ forecast/);
+    assert.equal((await handle(new Request(`https://product.test/api/conjure/${r.ticket}`), { user: "u2" })).status, 404, "someone else can't follow it");
+    const forged = r.ticket.replace(/\.[\w-]+$/, ".AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    assert.equal((await handle(new Request(`https://product.test/api/conjure/${forged}`), { user: "u1" })).status, 404);
+  });
+
+  test("answers 503 when Conjure isn't configured", async () => {
+    const off = createConjureRoutes({ conjure: null, secret: "x" });
+    assert.equal((await off(post({ text: "@conjure q" }), { user: "u1" })).status, 503);
+  });
+});
