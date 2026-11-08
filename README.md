@@ -57,6 +57,22 @@ npm start                                           # the app opens http://local
 
 To point the app at another server: `adb shell am start -n com.conjure.app/.MainActivity --es url http://host:4317/` (remembered). Zip downloads go to the phone's Downloads folder.
 
+## Deploy to AWS
+
+`deploy/aws/` runs Conjure on one EC2 instance (Amazon Linux 2023, `t4g.small` by default, roughly $15/month with its Elastic IP). Caddy serves it over HTTPS on two free `sslip.io` hostnames: `app.<ip>.sslip.io` for the UI and `preview.<ip>.sslip.io` for previews, so generated code stays on a separate origin.
+
+```bash
+aws configure                          # or: aws sso login   (AWS CLI v2)
+node deploy/aws/deploy.mjs --profile infinitum   # first run creates everything; later runs roll out the working tree
+node deploy/aws/deploy.mjs --status    # URL and stack state
+node deploy/aws/deploy.mjs --destroy --yes
+```
+
+- **Sign-in:** the first deploy generates an access token, stores it in SSM Parameter Store (`/conjure/access-token`) and saves a copy to `.conjure-access-token` (git-ignored). With `CONJURE_ACCESS_TOKEN` set, every page and API call needs it (cookie after `/login`, or `Authorization: Bearer`); cross-site and non-JSON POSTs are refused.
+- **Live mode:** if `.env` has `ANTHROPIC_API_KEY`, the deploy stores it as `/conjure/anthropic-api-key`; without it the server runs in offline mock mode.
+- **No SSH:** port 22 is closed; use SSM Session Manager. The template (`deploy/aws/conjure.yaml`) builds its own VPC, so it doesn't depend on a default VPC.
+- **Android:** `adb shell am start -n com.conjure.app/.MainActivity --es url https://app.<ip>.sslip.io/`
+
 ## Evaluate it
 
 `eval/intents.json` holds five representative requests (three web apps, a Node CLI script, a live-preview tool). The harness runs each through Conjure and writes `eval-report.md` and `eval-results.json` with pass rate, repair rounds, tokens and estimated cost.

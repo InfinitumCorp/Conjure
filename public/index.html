@@ -116,7 +116,9 @@ function select(item) {
 }
 
 async function refresh(selectDir) {
-  const s = await (await fetch("/api/status")).json();
+  const sr = await fetch("/api/status");
+  if (sr.status === 401) { location.href = "/login"; return; }
+  const s = await sr.json();
   previewOrigin = s.previewOrigin;
   $("mode").textContent = s.live ? "live · Claude" : "offline · mock provider (add ANTHROPIC_API_KEY to .env for live)";
   if (!s.live) $("mock").checked = true;

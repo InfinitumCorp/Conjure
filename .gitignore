@@ -3,3 +3,4 @@ conjured/
 .env
 *.zip
 android/build/
+.conjure-access-token

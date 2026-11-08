@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Conjure on a single EC2 instance (Amazon Linux 2023) behind Caddy with automatic HTTPS
+  on sslip.io hostnames. Secrets come from SSM Parameter Store under /conjure/. No SSH:
+  manage the instance with SSM Session Manager.
+
+Parameters:
+  CodeBucket:
+    Type: String
+    Description: S3 bucket holding the Conjure release tarball
+  CodeKey:
+    Type: String
+    Description: S3 key of the release tarball used on first boot (later deploys go through SSM Run Command)
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    AllowedValues: [t4g.micro, t4g.small, t4g.medium, t3.micro, t3.small, t3.medium]
+  ImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Use the x86_64 AL2023 parameter with t3 instance types
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: conjure }]
+  Igw:
+    Type: AWS::EC2::InternetGateway
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: { VpcId: !Ref Vpc, InternetGatewayId: !Ref Igw }
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: conjure-public }]
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties: { VpcId: !Ref Vpc }
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttach
+    Properties: { RouteTableId: !Ref RouteTable, DestinationCidrBlock: 0.0.0.0/0, GatewayId: !Ref Igw }
+  SubnetRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref Subnet, RouteTableId: !Ref RouteTable }
+
+  WebSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Conjure HTTP/HTTPS (no SSH; use SSM Session Manager)
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: ACME + redirect }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
+
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: sts:AssumeRole }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: conjure-runtime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${CodeBucket}/releases/*
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/conjure/*
+  Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: { Roles: [!Ref Role] }
+
+  Eip:
+    Type: AWS::EC2::EIP
+    DependsOn: IgwAttach
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: conjure }]
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref Profile
+      SubnetId: !Ref Subnet
+      SecurityGroupIds: [!Ref WebSg]
+      MetadataOptions: { HttpTokens: required, HttpEndpoint: enabled }
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true }
+      Tags: [{ Key: Name, Value: conjure }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > >(tee -a /var/log/conjure-bootstrap.log) 2>&1
+          # Wait for the Elastic IP so Caddy's certificate challenge reaches this instance.
+          for i in $(seq 1 60); do
+            TOKEN=$(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+            IP=$(curl -fsS -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 || true)
+            [ "$IP" = "${Eip}" ] && break
+            sleep 5
+          done
+          mkdir -p /opt/conjure
+          aws s3 cp --region ${AWS::Region} s3://${CodeBucket}/${CodeKey} /tmp/conjure.tar.gz
+          mkdir -p /tmp/conjure-boot && tar -xzf /tmp/conjure.tar.gz -C /tmp/conjure-boot deploy/aws/install.sh
+          install -m 0755 /tmp/conjure-boot/deploy/aws/install.sh /opt/conjure/install.sh
+          /opt/conjure/install.sh ${CodeBucket} ${CodeKey} app.${Eip}.sslip.io preview.${Eip}.sslip.io ${AWS::Region}
+
+  EipAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties: { AllocationId: !GetAtt Eip.AllocationId, InstanceId: !Ref Instance }
+
+Outputs:
+  AppUrl:
+    Value: !Sub https://app.${Eip}.sslip.io
+  PreviewUrl:
+    Value: !Sub https://preview.${Eip}.sslip.io
+  InstanceId:
+    Value: !Ref Instance
+  PublicIp:
+    Value: !Ref Eip

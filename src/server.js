@@ -1,6 +1,8 @@
 #!/usr/bin/env node
-// Local web UI for Conjure. Binds to 127.0.0.1 only.
+// Web UI for Conjure. Binds to 127.0.0.1 by default (HOST to change). When
+// CONJURE_ACCESS_TOKEN is set (cloud deploys), every page and API call needs a login.
 import http from "node:http";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +18,10 @@ const PORT = Number(process.env.PORT || 4317);
 // Conjured output is served from a separate port (a different origin), so
 // generated code can't reach the Conjure API with same-origin access.
 const PREVIEW_PORT = Number(process.env.PREVIEW_PORT || PORT + 1);
+const HOST = process.env.HOST || "127.0.0.1";
+// Public URL of the preview server when it sits behind a proxy (e.g. https://preview.example.com).
+const PREVIEW_ORIGIN = process.env.PREVIEW_ORIGIN || `http://localhost:${PREVIEW_PORT}`;
+const ACCESS_TOKEN = process.env.CONJURE_ACCESS_TOKEN || "";
 const MOCK_DELAY = Number(process.env.CONJURE_MOCK_DELAY || 0);
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };
@@ -46,6 +52,75 @@ async function readJson(req, limit = 16 * 1024) {
     if (body.length > limit) throw new Error("body too large");
   }
   return JSON.parse(body);
+}
+
+// --- Access control (only when CONJURE_ACCESS_TOKEN is set) ---
+const COOKIE = "conjure_session";
+const sessionValue = ACCESS_TOKEN ? crypto.createHmac("sha256", ACCESS_TOKEN).update("conjure-session-v1").digest("hex") : "";
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function cookies(req) {
+  const out = {};
+  for (const part of (req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+
+function authorized(req) {
+  if (!ACCESS_TOKEN) return true;
+  const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || "")?.[1];
+  if (bearer && safeEqual(bearer, ACCESS_TOKEN)) return true;
+  return safeEqual(cookies(req)[COOKIE] || "", sessionValue);
+}
+
+/** Rejects cross-site writes: browsers send Origin on POST, and it must match this host. */
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true; // non-browser clients (curl, the CLI) send none
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+const LOGIN_PAGE = (error) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Conjure · sign in</title>
+<meta name="theme-color" content="#5b3df5"><link rel="icon" type="image/png" href="/icon-192.png">
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f0f12;color:#eee;font:15px/1.5 system-ui,sans-serif}
+form{width:min(360px,calc(100vw - 32px));display:grid;gap:12px}h1{margin:0 0 4px;font-size:24px}
+input{padding:12px;border-radius:10px;border:1px solid #333;background:#18181d;color:#eee;font:inherit}
+button{padding:12px;border:0;border-radius:10px;background:#5b3df5;color:#fff;font:inherit;font-weight:600}
+p{margin:0;color:#aaa;font-size:13px}.err{color:#ff8a8a}</style></head><body>
+<form method="post" action="/login"><h1>✦ Conjure</h1><p>Enter the access token for this server.</p>
+${error ? `<p class="err">${error}</p>` : ""}
+<input name="token" type="password" autocomplete="current-password" placeholder="Access token" required autofocus>
+<button>Sign in</button></form></body></html>`;
+
+async function handleLogin(req, res) {
+  if (req.method === "GET") return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(LOGIN_PAGE(""));
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > 4096) return res.writeHead(413).end();
+  }
+  const token = new URLSearchParams(body).get("token") || "";
+  if (!safeEqual(token, ACCESS_TOKEN)) {
+    await new Promise((r) => setTimeout(r, 750)); // slow down guessing
+    return res.writeHead(401, { "content-type": "text/html; charset=utf-8" }).end(LOGIN_PAGE("That token is not right."));
+  }
+  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  res.writeHead(303, {
+    location: "/",
+    "set-cookie": `${COOKIE}=${sessionValue}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
+  });
+  res.end();
 }
 
 const json = (res, status, data) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(data));
@@ -119,14 +194,30 @@ async function runJob(req, res, mock, flaw, job) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
 
-  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-    return serveFile(res, path.join(PUBLIC, "index.html"));
-  }
+  if (req.method === "GET" && url.pathname === "/healthz") return json(res, 200, { ok: true });
   if (req.method === "GET" && STATIC.has(url.pathname)) {
     return serveFile(res, path.join(PUBLIC, url.pathname.slice(1)));
   }
+  if (ACCESS_TOKEN && url.pathname === "/login" && (req.method === "GET" || req.method === "POST")) {
+    if (req.method === "POST" && !sameOrigin(req)) return res.writeHead(403).end("cross-site request refused");
+    return handleLogin(req, res);
+  }
+  if (!authorized(req)) {
+    if (req.method === "GET" && !url.pathname.startsWith("/api/")) return res.writeHead(303, { location: "/login" }).end();
+    return json(res, 401, { error: "sign in required" });
+  }
+  if (req.method === "POST") {
+    if (!sameOrigin(req)) return res.writeHead(403).end("cross-site request refused");
+    if (url.pathname !== "/api/cancel" && !/^application\/json\b/i.test(req.headers["content-type"] || "")) {
+      return res.writeHead(415).end("content-type must be application/json");
+    }
+  }
+
+  if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+    return serveFile(res, path.join(PUBLIC, "index.html"));
+  }
   if (req.method === "GET" && url.pathname === "/api/status") {
-    return json(res, 200, { live: hasCredentials(), busy: Boolean(current), previewOrigin: `http://localhost:${PREVIEW_PORT}` });
+    return json(res, 200, { live: hasCredentials(), busy: Boolean(current), previewOrigin: PREVIEW_ORIGIN });
   }
   if (req.method === "GET" && url.pathname === "/api/history") {
     return json(res, 200, await history());
@@ -194,7 +285,8 @@ const preview = http.createServer(async (req, res) => {
   return serveFile(res, file);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`✦ Conjure UI on http://localhost:${PORT}  (${hasCredentials() ? "live: Claude" : "offline: mock provider"})`);
+server.listen(PORT, HOST, () => {
+  const mode = hasCredentials() ? "live: Claude" : "offline: mock provider";
+  console.log(`✦ Conjure UI on http://${HOST === "127.0.0.1" ? "localhost" : HOST}:${PORT}  (${mode}${ACCESS_TOKEN ? ", sign-in required" : ""})`);
 });
-preview.listen(PREVIEW_PORT, "127.0.0.1", () => console.log(`  previews on http://localhost:${PREVIEW_PORT}`));
+preview.listen(PREVIEW_PORT, HOST, () => console.log(`  previews on ${PREVIEW_ORIGIN}`));
