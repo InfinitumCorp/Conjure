@@ -18,10 +18,22 @@ Options:
   --model    Claude model id (default claude-opus-5-5, or CONJURE_MODEL)
   --out      output directory for new builds (default ./conjured, or CONJURE_OUT)
   --flaw     (mock only) inject a bug to demo the verify -> repair loop
+  --geo      turn geo routing on and save that choice (default off)
+  --no-geo   turn geo routing off and save that choice
   -q         hide streamed model text
-Press Ctrl+C to cancel a run.`;
+Press Ctrl+C to cancel a run.
+Geo routing stays off until --geo or the settings toggle. Fetch datasets with: npm run geo:fetch`;
+
+let geoFlag;
+const args = [];
+for (const arg of process.argv.slice(2)) {
+  if (arg === "--geo") geoFlag = true;
+  else if (arg === "--no-geo") geoFlag = false;
+  else args.push(arg);
+}
 
 const { values, positionals } = parseArgs({
+  args,
   allowPositionals: true,
   options: {
     mock: { type: "boolean" },
@@ -35,9 +47,37 @@ const { values, positionals } = parseArgs({
 
 const isRefine = positionals[0] === "refine";
 const isZip = positionals[0] === "zip";
-if (values.help || positionals.length === 0 || (isRefine && positionals.length < 3) || (isZip && positionals.length !== 2)) {
+if (values.help) {
   console.log(HELP);
-  process.exit(values.help ? 0 : 1);
+  process.exit(0);
+}
+
+const { SettingsStore, conjureDataDir } = await import("./settings.js");
+const { annotate, geoDataDir, geoEnabled } = await import("./geo.js");
+const settings = await new SettingsStore(path.join(conjureDataDir(), "settings.json")).load();
+if (geoFlag !== undefined) await settings.setGeoRouting(geoFlag);
+
+if (positionals.length === 0) {
+  if (geoFlag !== undefined) {
+    console.log(settings.geoRouting ? "Geo routing is on." : "Geo routing is off.");
+    process.exit(0);
+  }
+  console.log(HELP);
+  process.exit(1);
+}
+if ((isRefine && positionals.length < 3) || (isZip && positionals.length !== 2)) {
+  console.log(HELP);
+  process.exit(1);
+}
+
+function reportGeo(text) {
+  if (!geoEnabled(process.env, settings.geoRouting)) return;
+  try {
+    const found = annotate({ dir: geoDataDir(), text });
+    if (found) console.log(dim(`  geo ${found.route}`));
+  } catch (err) {
+    console.log(dim(`  geo datasets unavailable (${err.message})`));
+  }
 }
 
 if (positionals[0] === "list" && positionals.length === 1) {
@@ -116,14 +156,18 @@ console.log(bold(`✦ Conjure`) + dim(`  provider=${provider.name} model=${provi
 try {
   if (isRefine) {
     const dir = path.resolve(positionals[1]);
-    const r = await refine({ dir, change: positionals.slice(2).join(" "), provider, signal: controller.signal, onEvent });
+    const change = positionals.slice(2).join(" ");
+    reportGeo(change);
+    const r = await refine({ dir, change, provider, signal: controller.signal, onEvent });
     const e = r.refinement;
     console.log(`\n${bold(e.ok ? "✓ Refined" : "⚠ Refined with failing checks")}: ${e.summary || e.change}`);
     console.log(`  ${r.workspace}`);
     console.log(dim(`  ${e.repairs} repair(s) · ${stats(e)} · ${r.history.length} change(s) so far`));
     process.exit(e.ok ? 0 : 2);
   } else {
-    const r = await conjure({ intent: positionals.join(" "), provider, outDir: values.out ?? DEFAULT_OUT, signal: controller.signal, onEvent });
+    const intent = positionals.join(" ");
+    reportGeo(intent);
+    const r = await conjure({ intent, provider, outDir: values.out ?? DEFAULT_OUT, signal: controller.signal, onEvent });
     console.log(`\n${bold(r.verification.ok ? "✓ Conjured" : "⚠ Conjured with failing checks")}: ${r.summary || r.plan.name}`);
     console.log(`  ${r.workspace}`);
     console.log(dim(`  ${r.files.length} files · ${r.verification.repairs} repair(s) · ${stats(r)}`));

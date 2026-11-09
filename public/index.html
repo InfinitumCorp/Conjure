@@ -141,6 +141,7 @@
     <div class="options">
       <label class="check"><input type="checkbox" id="mock"> Offline (mock)</label>
       <label class="check"><input type="checkbox" id="flaw"> Inject a bug</label>
+      <label class="check"><input type="checkbox" id="geo"> Geo routing</label>
     </div>
     <details class="logwrap" open>
       <summary>Build log</summary>
@@ -204,6 +205,10 @@ async function refresh(selectDir) {
   const sr = await fetch("/api/status");
   if (sr.status === 401) { location.href = "/login"; return; }
   const s = await sr.json();
+  try {
+    const g = await (await fetch("/api/settings")).json();
+    if (typeof g.geoRouting === "boolean") $("geo").checked = g.geoRouting;
+  } catch {}
   previewOrigin = s.previewOrigin;
   $("mode").textContent = s.live ? "Live · Claude" : "Offline · mock builds (add an Anthropic API key for live Claude)";
   if (!s.live) $("mock").checked = true;
@@ -265,6 +270,7 @@ async function run(url, body) {
         if (!chunk.startsWith("data: ")) continue;
         const e = JSON.parse(chunk.slice(6));
         if (e.type === "start") line(`provider=${e.provider} model=${e.model}`, "dim");
+        else if (e.type === "geo") line(`geo route ${e.route}`, "dim");
         else if (e.type === "phase") line(`${e.phase[0].toUpperCase()}${e.phase.slice(1)}${e.attempt ? " #" + e.attempt : ""}`, "phase");
         else if (e.type === "plan") { line(`${e.plan.name}: ${e.plan.summary}`); e.plan.files.forEach(f => line(`  · ${f.path} — ${f.purpose}`, "dim")); }
         else if (e.type === "text" && e.phase === "forge") stream(e.text);
@@ -303,6 +309,16 @@ $("stop").onclick = async () => {
   if (running) running.abort();
   else setTimeout(refresh, 500); // a server-side run started elsewhere
 };
+$("geo").addEventListener("change", async () => {
+  const on = $("geo").checked;
+  try {
+    const res = await fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ geoRouting: on }) });
+    if (!res.ok) throw new Error(await res.text());
+  } catch {
+    $("geo").checked = !on;
+    line("Could not save geo routing", "bad");
+  }
+});
 $("intent").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("go").click(); });
 $("change").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) $("apply").click(); });
 // Pause motion (house rule: a visible control, plus prefers-reduced-motion).
