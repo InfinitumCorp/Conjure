@@ -93,7 +93,7 @@ export class PredictionService extends EventEmitter {
   }
 
   /** Validates input and queues a run. Throws ConjureError for bad input. */
-  async create({ product, user, source, question, context, agents, rounds, mock }) {
+  async create({ product, user, source, question, context, agents, rounds, mock, geoNote }) {
     const q = typeof question === "string" ? question.trim() : "";
     if (!q) throw new ConjureError("Ask a question after @conjure");
     if (q.length > MAX_QUESTION) throw new ConjureError(`Keep the question under ${MAX_QUESTION} characters`);
@@ -107,6 +107,13 @@ export class PredictionService extends EventEmitter {
       agents: a, rounds: r, mock: Boolean(mock), status: "queued", createdAt: new Date().toISOString(),
       estimate: estimateCalls(a, r).calls,
     };
+    // Server-supplied annotation only. A client field named geo or geoNote is not copied onto the record.
+    if (geoNote && typeof geoNote === "object") {
+      rec.geo = {
+        country: typeof geoNote.country === "string" ? geoNote.country : null,
+        categories: Array.isArray(geoNote.categories) ? geoNote.categories.filter((c) => typeof c === "string").slice(0, 100) : [],
+      };
+    }
     this.records.set(rec.id, rec);
     await this.save(rec);
     this.queue.push(rec);

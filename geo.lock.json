@@ -1,0 +1,26 @@
+{
+  "note": "Pinned v2fly releases only. Do not substitute Loyalsoldier or sing-box builds (GPL-3).",
+  "outDir": "data/geo",
+  "files": [
+    {
+      "name": "geoip.dat",
+      "project": "v2fly/geoip",
+      "tag": "202611080027",
+      "asset": "geoip.dat",
+      "url": "https://github.com/v2fly/geoip/releases/download/202611080027/geoip.dat",
+      "sha256sumUrl": "https://github.com/v2fly/geoip/releases/download/202611080027/geoip.dat.sha256sum",
+      "sha256": "eedb24b3b9fcba27e06b92c0428dab90d9496083091ae4cf39e11387fd99d0e2",
+      "license": "CC-BY-SA-4.0"
+    },
+    {
+      "name": "geosite.dat",
+      "project": "v2fly/domain-list-community",
+      "tag": "20261108011013",
+      "asset": "dlc.dat",
+      "url": "https://github.com/v2fly/domain-list-community/releases/download/20261108011013/dlc.dat",
+      "sha256sumUrl": "https://github.com/v2fly/domain-list-community/releases/download/20261108011013/dlc.dat.sha256sum",
+      "sha256": "dc4192dd1b644a38276ed06136d26e729fa674d25785adb38c87e040e92376b2",
+      "license": "MIT"
+    }
+  ]
+}

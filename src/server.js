@@ -12,6 +12,7 @@ import { zipDeliverable } from "./zip.js";
 import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
 import { PredictionService, publicView } from "./predict/service.js";
 import { ConjureError as PredictError } from "./predict/vendor/conjure.ts";
+import { annotateProductRequest, geoEnabled, loadGeo } from "./geo.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.resolve(here, "..", "public");
@@ -32,7 +33,10 @@ const access = await new AccessStore({ file: path.join(DATA, "access.json"), own
 const predictions = new PredictionService({
   dir: path.join(DATA, "predictions"),
   delayMs: MOCK_DELAY,
-  onFinish: (rec) => access.logUsage({ kind: "prediction", id: rec.id, product: rec.product, user: rec.user, status: rec.status, ms: rec.ms, calls: rec.sim?.calls ?? 0, mode: rec.mode }),
+  onFinish: (rec) => access.logUsage({
+    kind: "prediction", id: rec.id, product: rec.product, user: rec.user, status: rec.status,
+    ms: rec.ms, calls: rec.sim?.calls ?? 0, mode: rec.mode, ...(rec.geo ? { geo: rec.geo } : {}),
+  }),
 });
 await predictions.load();
 
@@ -275,7 +279,10 @@ async function handleV1(req, res, url, who) {
       return json(res, 429, { error: `daily limit of ${who.dailyLimit} forecasts reached for ${product}` });
     }
     try {
-      const rec = await predictions.create({ ...body, product, user: body.user, mock: who.kind === "staff" ? body.mock : false });
+      // Opt-in cyber annotation. Off by default, so the record and the usage line stay as they are.
+      // When on, the usage log gains country and domain categories. It never allows or blocks the call.
+      const geoNote = annotateProductRequest(req, { domain: typeof body.source === "string" ? body.source : "" });
+      const rec = await predictions.create({ ...body, product, user: body.user, mock: who.kind === "staff" ? body.mock : false, geoNote });
       if (who.kind === "product") access.touchProduct(who.record);
       return json(res, 202, publicView(rec));
     } catch (err) {
@@ -478,6 +485,15 @@ const preview = http.createServer(async (req, res) => {
   if (!file) return res.writeHead(400).end("bad path");
   return serveFile(res, file);
 });
+
+if (geoEnabled()) {
+  try {
+    loadGeo(process.env.INFINITUM_GEO_DIR || undefined);
+    console.log("  cyber geo annotation on");
+  } catch (err) {
+    console.error(`  cyber geo annotation unavailable: ${err.message}`);
+  }
+}
 
 server.listen(PORT, HOST, () => {
   const mode = hasCredentials() ? "live: Claude" : "offline: mock provider";

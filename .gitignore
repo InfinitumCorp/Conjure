@@ -5,3 +5,5 @@ conjured/
 android/build/
 .conjure-access-token
 conjure-data/
+# v2fly geoip.dat and geosite.dat from `npm run geo:fetch`. Never commit the binaries.
+data/geo/
