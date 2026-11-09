@@ -86,7 +86,7 @@ public class MainActivity extends Activity {
                         getSharedPreferences("conjure", Context.MODE_PRIVATE).edit().putString("url", next).apply();
                         view.loadUrl(next);
                     } else {
-                        Toast.makeText(MainActivity.this, "Enter an http:// or https:// address", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(MainActivity.this, getString(R.string.enter_http_address), Toast.LENGTH_SHORT).show();
                     }
                     return true;
                 }
@@ -106,9 +106,9 @@ public class MainActivity extends Activity {
                 r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                 r.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name);
                 ((DownloadManager) getSystemService(DOWNLOAD_SERVICE)).enqueue(r);
-                Toast.makeText(this, "Downloading " + name, Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, getString(R.string.downloading, name), Toast.LENGTH_SHORT).show();
             } catch (Exception e) {
-                Toast.makeText(this, "Download failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                Toast.makeText(this, getString(R.string.download_failed, e.getMessage()), Toast.LENGTH_LONG).show();
             }
         });
 
@@ -137,21 +137,20 @@ public class MainActivity extends Activity {
 
     private void showOffline(String why) {
         String field = "width:100%;box-sizing:border-box;padding:16px;border:1px solid #111820;border-radius:0;background:#fff;color:#111820;font:inherit;font-size:17px";
-        String html = "<!doctype html><html lang='en'><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        String html = "<!doctype html><html lang='" + java.util.Locale.getDefault().getLanguage() + "'><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
             + "<style>body{margin:0;padding:40px 20px;background:#fff;color:#111820;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:16px;line-height:1.55}"
             + "h1{font-weight:400;font-size:48px;line-height:1;letter-spacing:-.065em;margin:0 0 20px}"
             + "sup{font-size:.38em;vertical-align:super;line-height:0;margin-left:.08em;letter-spacing:0}"
             + "p{color:#52606b}code{color:#111820}hr{border:0;border-top:1px solid #d6dce1;margin:28px 0}"
             + "button{margin-top:14px;padding:17px 22px;border:1px solid #111820;border-radius:0;background:#111820;color:#fff;font:inherit}"
             + "button.sec{background:#fff;color:#111820;padding:13px 20px}</style></head>"
-            + "<body><h1>Can't reach Conjure<sup>&trade;</sup></h1><p>" + escape(why) + "</p>"
-            + "<p>Check your connection and that the server is running. For a server on your computer, run <code>npm start</code> and connect this phone with "
-            + "<code>adb reverse tcp:4317 tcp:4317</code> and <code>adb reverse tcp:4318 tcp:4318</code>.</p>"
-            + "<button onclick=\"location.href='" + escape(home) + "'\">Retry</button>"
+            + "<body><h1>" + escape(getString(R.string.offline_title)) + "<sup>&trade;</sup></h1><p>" + escape(why) + "</p>"
+            + "<p>" + String.format(escape(getString(R.string.offline_help)), "<code>npm start</code>", "<code>adb reverse tcp:4317 tcp:4317</code>", "<code>adb reverse tcp:4318 tcp:4318</code>") + "</p>"
+            + "<button onclick=\"location.href='" + escape(home) + "'\">" + escape(getString(R.string.retry)) + "</button>"
             + "<hr><form action='conjure://server' method='get'>"
-            + "<p>Or use another server:</p>"
-            + "<input name='url' type='url' aria-label='Server address' value='" + escape(home) + "' style='" + field + "'>"
-            + "<button class='sec'>Use this server</button></form></body></html>";
+            + "<p>" + escape(getString(R.string.other_server)) + "</p>"
+            + "<input name='url' type='url' aria-label='" + escape(getString(R.string.server_address)) + "' value='" + escape(home) + "' style='" + field + "'>"
+            + "<button class='sec'>" + escape(getString(R.string.use_this_server)) + "</button></form></body></html>";
         web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
     }
 
