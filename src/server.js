@@ -37,7 +37,9 @@ const predictions = new PredictionService({
 await predictions.load();
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };
-const STATIC = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"]);
+const STATIC = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png",
+  // Interface language (@infinitum/i18n): runtime and build-time catalogs, public, no model calls.
+  "/i18n/i18n.js", "/i18n/i18n.css", "/i18n/start.js", "/i18n/catalogs.js"]);
 
 let current = null; // { controller } while a run is in progress
 
