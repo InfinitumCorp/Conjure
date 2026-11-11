@@ -19,6 +19,9 @@ export default defineConfig({
       DEFAULT_MODEL: bindings.text("@cf/qwen/qwen3-30b-a3b-fp8"),
       // Workers AI includes 10,000 neurons a day at no charge; stop at 9,500 for margin.
       DAILY_NEURONS: bindings.text("9500"),
+      // No-account free fallbacks (OVHcloud, Pollinations, LLM7) once the allowance is used up.
+      // Turned on at the owner's request on 2026-11-11, accepting that these anonymous tiers may log prompts.
+      KEYLESS_FALLBACKS: bindings.text("on"),
     },
   },
 });
