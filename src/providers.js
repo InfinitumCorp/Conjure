@@ -176,10 +176,15 @@ export class OpenWeightsProvider {
     this.baseUrl = this.urls[0];
     this.model = model || env.CONJURE_OPEN_WEIGHTS_MODEL || (this.viaGateway ? env.CONJURE_LLM_MODEL : "") || env.CONJURE_MODEL || OPEN_WEIGHTS_DEFAULT_MODEL;
     this.apiKey = apiKey ?? env.CONJURE_OPEN_WEIGHTS_KEY ?? (this.viaGateway ? env.CONJURE_LLM_KEY ?? "" : "");
-    this.extraHeaders =
-      this.viaGateway && env.CONJURE_LLM_ACCESS_ID && env.CONJURE_LLM_ACCESS_SECRET
-        ? { "cf-access-client-id": env.CONJURE_LLM_ACCESS_ID, "cf-access-client-secret": env.CONJURE_LLM_ACCESS_SECRET }
-        : {};
+    this.extraHeaders = this.viaGateway
+      ? {
+          ...(env.CONJURE_LLM_ACCESS_ID && env.CONJURE_LLM_ACCESS_SECRET
+            ? { "cf-access-client-id": env.CONJURE_LLM_ACCESS_ID, "cf-access-client-secret": env.CONJURE_LLM_ACCESS_SECRET }
+            : {}),
+          // Yandex Cloud AI Studio (Conjure Russia) wants the folder ID as OpenAI-Project.
+          ...(env.CONJURE_LLM_PROJECT ? { "openai-project": env.CONJURE_LLM_PROJECT } : {}),
+        }
+      : {};
     // "none" skips Qwen3's thinking so the token budget goes to the answer.
     this.reasoning = this.viaGateway ? env.CONJURE_LLM_REASONING || "" : "";
     this.fetchImpl = fetchImpl;
