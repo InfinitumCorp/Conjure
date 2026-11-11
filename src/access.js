@@ -2,8 +2,6 @@
 //   People sign in with Cumulus ID (id.cumuluscloud.app), never a token typed into a form:
 //   Owner:    a Cumulus ID listed in CID_OWNERS. Full admin. CONJURE_ACCESS_TOKEN turns access
 //             control on and signs session cookies; scripts may still send it as a Bearer token.
-//   Staff:    Infinitum staff, matched by their Cumulus ID (or email until it is linked). Role
-//             "admin" or "staff". Each also gets a cjs_ token, for scripts only.
 //   Products: one key per product (cjp_<slug>_...). Only the /v1 prediction API.
 // Tokens are stored as SHA-256 hashes; the plain token is shown once when created.
 import crypto from "node:crypto";
@@ -31,7 +29,7 @@ export class AccessStore {
   constructor({ file, ownerToken }) {
     this.file = file;
     this.ownerToken = ownerToken || "";
-    this.data = { staff: [], products: [] };
+    this.data = { products: [] };
     this.usageFile = path.join(path.dirname(file), "usage.jsonl");
     // Cookie signing key: derived from the owner token so sessions survive restarts.
     this.secret = crypto.createHmac("sha256", this.ownerToken || crypto.randomBytes(32)).update("conjure-session-v2").digest();
@@ -40,7 +38,7 @@ export class AccessStore {
   async load() {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     try {
-      this.data = { staff: [], products: [], ...JSON.parse(await fs.readFile(this.file, "utf8")) };
+      this.data = { products: [], ...JSON.parse(await fs.readFile(this.file, "utf8")) };
     } catch {}
     return this;
   }
@@ -61,32 +59,15 @@ export class AccessStore {
     return { kind: "staff", id: "owner", name: "Owner", role: "admin" };
   }
 
-  /** A staff member or the owner, from a sign-in token. */
+  /** The owner, from the owner token (scripts). */
   staffByToken(token) {
     if (!token) return null;
-    if (this.ownerToken && safeEqual(token, this.ownerToken)) return this.owner();
-    if (!token.startsWith("cjs_")) return null;
-    const h = sha(token);
-    const s = this.data.staff.find((x) => !x.revokedAt && safeEqual(x.hash, h));
-    return s ? { kind: "staff", id: s.id, name: s.name, role: s.role } : null;
+    return this.ownerToken && safeEqual(token, this.ownerToken) ? this.owner() : null;
   }
 
-  /**
-   * The owner or a staff member, from a verified Cumulus ID profile ({ cid, username, email }).
-   * A staff record added by email is linked to the first Cumulus ID that signs in with that email.
-   */
+  /** The owner, from a verified Cumulus ID profile ({ cid, username, email }) listed in CID_OWNERS. */
   async staffByCid(profile, owners = []) {
-    if (!profile?.cid) return null;
-    if (isOwner(profile, owners)) return this.owner();
-    const email = String(profile.email || "").toLowerCase();
-    let s = this.data.staff.find((x) => !x.revokedAt && x.cid && x.cid === profile.cid);
-    if (!s && email) s = this.data.staff.find((x) => !x.revokedAt && !x.cid && x.email && x.email.toLowerCase() === email);
-    if (!s) return null;
-    if (!s.cid) {
-      s.cid = profile.cid;
-      await this.save();
-    }
-    return { kind: "staff", id: s.id, name: s.name, role: s.role };
+    return profile?.cid && isOwner(profile, owners) ? this.owner() : null;
   }
 
   productByKey(key) {
@@ -110,30 +91,10 @@ export class AccessStore {
     const [id, exp, mac] = parts;
     if (!safeEqual(mac, crypto.createHmac("sha256", this.secret).update(`${id}.${exp}`).digest("base64url"))) return null;
     if (!(Number(exp) > Date.now())) return null;
-    if (id === "owner") return this.owner();
-    const s = this.data.staff.find((x) => x.id === id && !x.revokedAt);
-    return s ? { kind: "staff", id: s.id, name: s.name, role: s.role } : null;
+    return id === "owner" ? this.owner() : null;
   }
 
   /* ---- admin actions ---- */
-
-  async addStaff({ name, email, role, cid }, by) {
-    const n = String(name ?? "").trim().slice(0, 80);
-    if (!n) throw new Error("name is required");
-    const token = `cjs_${crypto.randomBytes(24).toString("base64url")}`;
-    const rec = { id: `st_${crypto.randomBytes(6).toString("hex")}`, name: n, email: String(email ?? "").trim().slice(0, 120) || undefined, cid: String(cid ?? "").trim().slice(0, 120) || undefined, role: role === "admin" ? "admin" : "staff", hash: sha(token), prefix: token.slice(0, 10), createdAt: now(), createdBy: by?.name };
-    this.data.staff.push(rec);
-    await this.save();
-    return { staff: this.publicStaff(rec), token };
-  }
-
-  async revokeStaff(id, by) {
-    const s = this.data.staff.find((x) => x.id === id);
-    if (!s || s.revokedAt) return false;
-    Object.assign(s, { revokedAt: now(), revokedBy: by?.name });
-    await this.save();
-    return true;
-  }
 
   async addProduct({ slug, name, dailyLimit }, by) {
     const sl = String(slug ?? "").trim().toLowerCase();
@@ -172,16 +133,8 @@ export class AccessStore {
     await this.save().catch(() => {});
   }
 
-  publicStaff({ hash: _h, ...s }) {
-    return s;
-  }
-
   publicProduct({ hash: _h, ...p }) {
     return p;
-  }
-
-  listStaff() {
-    return this.data.staff.map((s) => this.publicStaff(s));
   }
 
   listProducts() {

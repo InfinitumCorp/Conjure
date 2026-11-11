@@ -57,7 +57,7 @@ describe("@conjure mentions", () => {
 });
 
 describe("prediction service with staff sign-in", () => {
-  let s, productKey, staffToken, issuer;
+  let s, productKey, issuer;
   before(async () => {
     // Stand-in Cumulus ID issuer: the code is the cid of the person who signed in.
     issuer = http.createServer(async (req, res) => {
@@ -143,22 +143,19 @@ describe("prediction service with staff sign-in", () => {
     assert.equal((await fetch(`${s.base}/v1/health`, { headers: auth(r.key) })).status, 200);
   });
 
-  test("staff get their own tokens; staff can view but not change keys; revoking signs them out", async () => {
-    const add = await (await fetch(`${s.base}/api/admin/staff`, { method: "POST", headers: auth(OWNER), body: JSON.stringify({ name: "Ada", role: "staff", cid: "cid_ada" }) })).json();
-    staffToken = add.token;
-    // Staff sign in with their Cumulus ID; the cjs_ token is for scripts.
+  test("there is no staff list: only CID_OWNERS sign in, and other Cumulus IDs are refused", async () => {
+    // The staff routes are gone.
+    assert.equal((await fetch(`${s.base}/api/admin/staff`, { method: "POST", headers: auth(OWNER), body: JSON.stringify({ name: "Ada", cid: "cid_ada" }) })).status, 404);
+    const ov = await (await fetch(`${s.base}/api/admin/overview`, { headers: auth(OWNER) })).json();
+    assert.equal(ov.staff, undefined);
+    // A Cumulus ID that isn't an owner can't sign in.
     const start = await fetch(`${s.base}/auth/cid/start`, { redirect: "manual" });
     const state = new URL(start.headers.get("location")).searchParams.get("state");
     const login = await fetch(`${s.base}/auth/cid/callback?code=cid_ada&state=${state}`, { redirect: "manual", headers: { cookie: start.headers.get("set-cookie").split(";")[0] } });
-    assert.equal(login.status, 303);
-    const cookie = login.headers.getSetCookie().find((c) => c.startsWith("conjure_session=")).split(";")[0];
-    assert.ok(!cookie.includes(staffToken));
-    const ov = await (await fetch(`${s.base}/api/admin/overview`, { headers: { cookie } })).json();
-    assert.equal(ov.me.name, "Ada");
-    assert.equal(ov.staff, undefined, "staff can't list staff");
-    assert.equal((await fetch(`${s.base}/api/admin/products`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ slug: "eon" }) })).status, 403);
-    await fetch(`${s.base}/api/admin/staff/${add.staff.id}/revoke`, { method: "POST", headers: auth(OWNER), body: "{}" });
-    assert.equal((await fetch(`${s.base}/api/admin/overview`, { headers: { cookie } })).status, 401);
+    assert.equal(login.status, 403);
+    assert.ok(!(login.headers.getSetCookie() || []).some((c) => c.startsWith("conjure_session=") && !/Max-Age=0|expires=Thu, 01 Jan 1970/i.test(c)));
+    // Old cjs_ script tokens are not accepted.
+    assert.equal((await fetch(`${s.base}/api/admin/overview`, { headers: { authorization: "Bearer cjs_anything" } })).status, 401);
   });
 
   test("a forecast streams live over server-sent events", async () => {

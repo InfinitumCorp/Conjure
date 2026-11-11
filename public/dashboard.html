@@ -92,7 +92,6 @@
     <span id="me">Signing in…</span>
     <a href="#forecasts">Forecasts</a>
     <a href="#products">Products</a>
-    <a href="#staff" id="staffLink" hidden>Staff</a>
     <a href="/studio">Studio</a>
     <form method="post" action="/logout" id="logoutForm" hidden><button class="linkbtn">Sign out</button></form>
   </nav>
@@ -151,23 +150,6 @@
     <div class="secret" id="productSecret" role="status"></div>
   </section>
 
-  <section class="block" id="staff" aria-labelledby="st-title" hidden>
-    <h2 id="st-title">Staff</h2>
-    <p class="lede">Every person gets their own token. Revoking one signs that person out everywhere.</p>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Token</th><th>Added</th><th></th></tr></thead>
-      <tbody id="staffRows"></tbody>
-    </table></div>
-    <form class="row" id="staffForm">
-      <label class="label">Name<input type="text" id="sName" required></label>
-      <label class="label">Cumulus ID email<input type="email" id="sEmail"></label>
-      <label class="label">or CID<input type="text" id="sCid" autocomplete="off"></label>
-      <label class="label">Role<select id="sRole"><option value="staff">Staff (view, try)</option><option value="admin">Admin (keys, staff)</option></select></label>
-      <button class="btn-primary">Add staff</button>
-    </form>
-    <div class="secret" id="staffSecret" role="status"></div>
-  </section>
-
   <section class="block" aria-labelledby="int-title">
     <h2 id="int-title">Add @conjure to a product</h2>
     <ul class="plain">
@@ -209,7 +191,6 @@ function render() {
   $("me").textContent = `${d.me.name} · ${d.me.role === "admin" ? "Admin" : "Staff"}`;
   $("logoutForm").hidden = d.me.name === "Local";
   const admin = d.me.role === "admin";
-  $("staff").hidden = $("staffLink").hidden = !admin;
   $("productForm").hidden = !admin;
   $("stats").innerHTML = [
     stat("Mode", d.live ? "Live" : "Offline mock"), stat("Model", d.live ? String(d.model).replace(/^@cf\/[^/]+\//, "") : "mock"),
@@ -240,12 +221,6 @@ function render() {
   const opts = Object.entries(d.known).filter(([slug]) => !used.has(slug)).map(([slug, name]) => `<option value="${esc(slug)}">${esc(name)} (${esc(slug)})</option>`);
   if ($("pSlug").dataset.n !== String(opts.length)) { $("pSlug").innerHTML = opts.join("") || `<option value="">Every product has a key</option>`; $("pSlug").dataset.n = String(opts.length); }
 
-  if (admin) {
-    $("staffRows").innerHTML = (d.staff || []).length ? d.staff.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.email || "—")}</td><td>${esc(s.role)}</td>
-      <td><code>${esc(s.prefix)}…</code>${s.revokedAt ? `<div class="sub">revoked</div>` : ""}</td><td>${esc(when(s.createdAt))}</td>
-      <td>${s.revokedAt ? "" : `<button class="btn-secondary" data-unstaff="${esc(s.id)}">Revoke</button>`}</td></tr>`).join("")
-      : `<tr><td colspan="6" class="empty">Only the owner so far. Add each staff member so access can be revoked one person at a time.</td></tr>`;
-  }
 }
 
 async function refresh() {
@@ -325,7 +300,6 @@ document.addEventListener("click", async (e) => {
       showSecret($("productSecret"), `New key for ${r.product.name}`, r.key, "Shown once. Put it in the product's server environment as CONJURE_PRODUCT_KEY."); refresh();
     }
     if (t.dataset.revoke && confirm("Revoke this key? The product loses @conjure until it gets a new key.")) { await api(`/api/admin/products/${t.dataset.revoke}/revoke`, { method: "POST", body: "{}" }); refresh(); }
-    if (t.dataset.unstaff && confirm("Revoke this person's access?")) { await api(`/api/admin/staff/${t.dataset.unstaff}/revoke`, { method: "POST", body: "{}" }); refresh(); }
   } catch (err) { alert(err.message); }
 });
 $("productForm").addEventListener("submit", async (e) => {
@@ -334,14 +308,6 @@ $("productForm").addEventListener("submit", async (e) => {
   try {
     const r = await api("/api/admin/products", { method: "POST", body: JSON.stringify({ slug: $("pSlug").value, name: data.known[$("pSlug").value], dailyLimit: +$("pLimit").value }) });
     showSecret($("productSecret"), `Key for ${r.product.name}`, r.key, "Shown once. Put it in the product's server environment as CONJURE_PRODUCT_KEY, with CONJURE_URL set to this server."); refresh();
-  } catch (err) { alert(err.message); }
-});
-$("staffForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  try {
-    const r = await api("/api/admin/staff", { method: "POST", body: JSON.stringify({ name: $("sName").value, email: $("sEmail").value, cid: $("sCid").value, role: $("sRole").value }) });
-    showSecret($("staffSecret"), `Script token for ${r.staff.name}`, r.token, "Shown once, for scripts only. People sign in here with their Cumulus ID.");
-    $("staffForm").reset(); refresh();
   } catch (err) { alert(err.message); }
 });
 
