@@ -215,7 +215,7 @@ function render() {
     // The free Workers AI allowance shared by the account (resets 00:00 UTC); a forecast uses about 300.
     ...(d.allowance ? [stat("Free model allowance left today", `${Math.round(d.allowance.remaining).toLocaleString()} of ${d.allowance.limit.toLocaleString()} (≈${Math.floor(d.allowance.remaining / 300)} forecasts)`)] : []),
     // Free providers the gateway falls back to once the allowance runs out.
-    ...(d.allowance ? [stat("Free backup models", (d.allowance.fallbacks || []).map((f) => `${f.name}: ${String(f.model).split("/").pop()}`).join(", ") || "None set up")] : []),
+    ...(d.allowance ? [stat("Free backup models", (d.allowance.fallbacks || []).map((f) => `${f.name} (${(f.models || [f.model]).length})`).join(", ") || "None set up")] : []),
     stat("Running", `${d.queue.running} of ${d.queue.concurrency}`), stat("Queued", d.queue.queued),
     stat("Forecasts, 24 h", d.day.total), stat("Succeeded, 24 h", pct(d.day.successRate)),
     stat("Average time", secs(d.day.avgMs)), stat("Products live", d.products.filter((p) => !p.revokedAt).length),

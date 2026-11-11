@@ -19,10 +19,12 @@ interface Env {
   GROQ_API_KEY?: string;
   NVIDIA_API_KEY?: string;
   OPENROUTER_API_KEY?: string;
+  /** "on" enables the no-account providers (OVHcloud, Pollinations, LLM7). Off by default: they may log prompts. */
+  KEYLESS_FALLBACKS?: string;
 }
 
 import { budgetedAI, FreeAllowanceUsed } from "./ai-budget.js";
-import { configured, fallback } from "./providers.js";
+import { configured, fallback, summary } from "./providers.js";
 
 const day = () => new Date().toISOString().slice(0, 10);
 
@@ -96,7 +98,7 @@ export default {
     if (!(await sameKey(auth.replace(/^Bearer\s+/i, ""), env.GATEWAY_KEY ?? ""))) return json({ error: { message: "Unauthorized" } }, 401);
     const backups = configured(env as unknown as Record<string, unknown>);
     if (url.pathname === "/v1/usage") {
-      return json({ ...(await budget().usage(limit)), fallbacks: backups.map((p) => ({ name: p.name, model: p.model })) });
+      return json({ ...(await budget().usage(limit)), fallbacks: summary(backups) });
     }
     if (request.method !== "POST") return json({ error: { message: "Use POST" } }, 405);
 
