@@ -4,6 +4,7 @@
 // so the engine stays a clean copy of Nexus.
 
 import { parseJson } from "./vendor/conjure.ts";
+import { authHeaders } from "../llm-auth.js";
 
 const TIMEOUT_MS = Number(process.env.CONJURE_LLM_TIMEOUT_MS || 600_000);
 // "none" turns thinking off on reasoning models (qwen3, gpt-oss) so the token budget goes to the answer.
@@ -30,7 +31,7 @@ async function failure(res) {
 async function chat({ baseUrl, model, apiKey, fetchImpl = fetch }, body) {
   return fetchImpl(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...ACCESS },
+    headers: { "content-type": "application/json", ...(await authHeaders(apiKey)), ...ACCESS },
     body: JSON.stringify({ model, ...(REASONING ? { reasoning_effort: REASONING } : {}), ...body }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
@@ -43,7 +44,7 @@ export async function modelUsage({ baseUrl = (process.env.CONJURE_LLM_URL || "")
   if (!baseUrl) return null;
   try {
     const res = await fetchImpl(`${baseUrl}/usage`, {
-      headers: { ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...ACCESS },
+      headers: { ...(await authHeaders(apiKey)), ...ACCESS },
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;

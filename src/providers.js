@@ -1,6 +1,7 @@
 // Model providers. Both return Anthropic-shaped messages ({content, stop_reason, usage})
 // so the engine never needs to know which one it is talking to.
 import Anthropic from "@anthropic-ai/sdk";
+import { authHeaders } from "./llm-auth.js";
 
 export const DEFAULT_MODEL = "claude-opus-5-5";
 
@@ -234,7 +235,8 @@ export class OpenWeightsProvider {
     };
     const res = await this.fetch("/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json", ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}), ...this.extraHeaders },
+      // The VM's own Yandex token only goes to the shared model server (CONJURE_LLM_URL).
+      headers: { "content-type": "application/json", ...(await authHeaders(this.apiKey, { vm: this.viaGateway })), ...this.extraHeaders },
       body: JSON.stringify(body),
       signal: signal ?? AbortSignal.timeout(this.timeoutMs),
     });
