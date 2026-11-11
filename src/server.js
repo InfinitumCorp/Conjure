@@ -9,6 +9,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { conjure, refine, ConjureError, ConjureCancelled } from "./engine.js";
 import { makeProvider, hasCredentials, DEFAULT_OUT } from "./config.js";
 import { zipDeliverable } from "./zip.js";
+import { cidConfig, startSignIn, finishSignIn, clearPending } from "./cid.js";
 import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
 import { PredictionService, publicView } from "./predict/service.js";
 import { modelUsage } from "./predict/openai.js";
@@ -25,6 +26,9 @@ const HOST = process.env.HOST || "127.0.0.1";
 // Public URL of the preview server when it sits behind a proxy (e.g. https://preview.example.com).
 const PREVIEW_ORIGIN = process.env.PREVIEW_ORIGIN || `http://localhost:${PREVIEW_PORT}`;
 const ACCESS_TOKEN = process.env.CONJURE_ACCESS_TOKEN || "";
+// People sign in with Cumulus ID. CID_ISSUER can point at a mirror that loads in Russia.
+const CID = cidConfig(process.env, { clientId: "conjure" });
+const PUBLIC_URL = (process.env.CONJURE_PUBLIC_URL || "").replace(/\/+$/, "");
 const ABORT_ON_DISCONNECT = process.env.CONJURE_ABORT_ON_DISCONNECT === "1";
 const MOCK_DELAY = Number(process.env.CONJURE_MOCK_DELAY || 0);
 // Staff, product keys, predictions and usage. Kept outside OUT: the preview server serves OUT.
@@ -120,41 +124,56 @@ input{width:100%;padding:16px;border:1px solid var(--ink);border-radius:0;backgr
 input:focus{outline:none;border-color:var(--accent)}
 button{justify-self:start;padding:17px 22px;border:1px solid var(--ink);border-radius:0;background:var(--ink);color:#fff;font:inherit;cursor:pointer;transition:background .2s,border-color .2s}
 button:hover{background:var(--accent);border-color:var(--accent)}
+button.link{padding:0;border:0;background:none;color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+button.link:hover{background:none;color:var(--accent)}
 input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:5px}
 footer{padding:22px clamp(16px,4vw,48px);border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 footer .tm{font-size:.65em}</style></head><body>
-<main><form method="post" action="/login"><h1>Conjure<sup class="tm">™</sup></h1>
-<p>Private to Infinitum staff. Sign in with your staff token.</p>
+<main><form method="get" action="/auth/cid/start"><h1>Conjure<sup class="tm">™</sup></h1>
+<p>Private to Infinitum staff. Sign in with your Cumulus ID.</p>
 ${error ? `<p class="err" role="alert">${error}</p>` : ""}
-<label for="token">Staff token</label>
-<input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
-<button>Sign in</button></form></main>
+<button autofocus>Sign in with Cumulus ID</button>
+<p>No Cumulus ID yet? <button class="link" name="create" value="1">Create a Cumulus ID</button></p></form></main>
 <footer>Conjure<sup class="tm">™</sup> · Infinitum Corporation</footer></body></html>`;
 
-async function handleLogin(req, res) {
-  if (req.method === "GET") return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(LOGIN_PAGE(""));
-  let body = "";
-  for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 4096) return res.writeHead(413).end();
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const isSecure = (req) => (PUBLIC_URL ? PUBLIC_URL.startsWith("https://") : req.headers["x-forwarded-proto"] === "https");
+const redirectUri = (req) => `${PUBLIC_URL || `${isSecure(req) ? "https" : "http"}://${req.headers.host}`}/auth/cid/callback`;
+const loginPage = (res, status, error) => res.writeHead(status, { "content-type": "text/html; charset=utf-8" }).end(LOGIN_PAGE(error ? esc(error) : ""));
+
+/** GET /login, /auth/cid/start and /auth/cid/callback: sign in with Cumulus ID. */
+async function handleLogin(req, res, url) {
+  const secure = isSecure(req);
+  if (url.pathname === "/login") return req.method === "GET" ? loginPage(res, 200, "") : res.writeHead(405, { allow: "GET" }).end();
+  if (req.method !== "GET") return res.writeHead(405, { allow: "GET" }).end();
+  if (url.pathname === "/auth/cid/start") {
+    const go = startSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, create: url.searchParams.get("create") === "1", secure });
+    return res.writeHead(302, { location: go.location, "set-cookie": go.cookie }).end();
   }
-  const token = (new URLSearchParams(body).get("token") || "").trim();
-  const who = access.staffByToken(token); // product keys can't sign in
-  if (!who) {
-    await new Promise((r) => setTimeout(r, 750)); // slow down guessing
-    return res.writeHead(401, { "content-type": "text/html; charset=utf-8" }).end(LOGIN_PAGE("That token is not right."));
+  let who;
+  try {
+    const { profile } = await finishSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, query: url.searchParams, cookies: cookies(req) });
+    who = await access.staffByCid(profile, CID.owners);
+    if (!who) {
+      res.setHeader("set-cookie", clearPending(secure));
+      return loginPage(res, 403, "This Cumulus ID is not on the Conjure staff list. Ask an admin to add you.");
+    }
+  } catch (e) {
+    res.setHeader("set-cookie", clearPending(secure));
+    return loginPage(res, 401, e.message);
   }
-  const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
+  const s = secure ? "; Secure" : "";
+  // Lax, not Strict: the browser arrives here from the Cumulus ID redirect.
   res.writeHead(303, {
     location: "/",
-    "set-cookie": `${COOKIE}=${access.sessionFor(who)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=2592000${secure}`,
+    "set-cookie": [`${COOKIE}=${access.sessionFor(who)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${s}`, clearPending(secure)],
   });
   res.end();
 }
 
 function logout(req, res) {
   const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
-  res.writeHead(303, { location: "/login", "set-cookie": `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}` }).end();
+  res.writeHead(303, { location: "/login", "set-cookie": `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}` }).end();
 }
 
 const json = (res, status, data) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(data));
@@ -381,9 +400,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && STATIC.has(url.pathname)) {
     return serveFile(res, path.join(PUBLIC, url.pathname.slice(1)));
   }
-  if (ACCESS_TOKEN && url.pathname === "/login" && (req.method === "GET" || req.method === "POST")) {
-    if (req.method === "POST" && !sameOrigin(req)) return res.writeHead(403).end("cross-site request refused");
-    return handleLogin(req, res);
+  if (ACCESS_TOKEN && (url.pathname === "/login" || url.pathname === "/auth/cid/start" || url.pathname === "/auth/cid/callback")) {
+    return handleLogin(req, res, url);
   }
   const who = principal(req);
   const isApi = url.pathname.startsWith("/api/") || url.pathname.startsWith("/v1/");

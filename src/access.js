@@ -1,9 +1,13 @@
 // Who may use this Conjure server.
-//   Owner:    CONJURE_ACCESS_TOKEN (set at deploy). Full admin.
-//   Staff:    Infinitum staff, each with their own token (cjs_...). Role "admin" or "staff".
+//   People sign in with Cumulus ID (id.cumuluscloud.app), never a token typed into a form:
+//   Owner:    a Cumulus ID listed in CID_OWNERS. Full admin. CONJURE_ACCESS_TOKEN turns access
+//             control on and signs session cookies; scripts may still send it as a Bearer token.
+//   Staff:    Infinitum staff, matched by their Cumulus ID (or email until it is linked). Role
+//             "admin" or "staff". Each also gets a cjs_ token, for scripts only.
 //   Products: one key per product (cjp_<slug>_...). Only the /v1 prediction API.
 // Tokens are stored as SHA-256 hashes; the plain token is shown once when created.
 import crypto from "node:crypto";
+import { isOwner } from "./cid.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -67,6 +71,24 @@ export class AccessStore {
     return s ? { kind: "staff", id: s.id, name: s.name, role: s.role } : null;
   }
 
+  /**
+   * The owner or a staff member, from a verified Cumulus ID profile ({ cid, username, email }).
+   * A staff record added by email is linked to the first Cumulus ID that signs in with that email.
+   */
+  async staffByCid(profile, owners = []) {
+    if (!profile?.cid) return null;
+    if (isOwner(profile, owners)) return this.owner();
+    const email = String(profile.email || "").toLowerCase();
+    let s = this.data.staff.find((x) => !x.revokedAt && x.cid && x.cid === profile.cid);
+    if (!s && email) s = this.data.staff.find((x) => !x.revokedAt && !x.cid && x.email && x.email.toLowerCase() === email);
+    if (!s) return null;
+    if (!s.cid) {
+      s.cid = profile.cid;
+      await this.save();
+    }
+    return { kind: "staff", id: s.id, name: s.name, role: s.role };
+  }
+
   productByKey(key) {
     if (!key?.startsWith("cjp_")) return null;
     const h = sha(key);
@@ -95,11 +117,11 @@ export class AccessStore {
 
   /* ---- admin actions ---- */
 
-  async addStaff({ name, email, role }, by) {
+  async addStaff({ name, email, role, cid }, by) {
     const n = String(name ?? "").trim().slice(0, 80);
     if (!n) throw new Error("name is required");
     const token = `cjs_${crypto.randomBytes(24).toString("base64url")}`;
-    const rec = { id: `st_${crypto.randomBytes(6).toString("hex")}`, name: n, email: String(email ?? "").trim().slice(0, 120) || undefined, role: role === "admin" ? "admin" : "staff", hash: sha(token), prefix: token.slice(0, 10), createdAt: now(), createdBy: by?.name };
+    const rec = { id: `st_${crypto.randomBytes(6).toString("hex")}`, name: n, email: String(email ?? "").trim().slice(0, 120) || undefined, cid: String(cid ?? "").trim().slice(0, 120) || undefined, role: role === "admin" ? "admin" : "staff", hash: sha(token), prefix: token.slice(0, 10), createdAt: now(), createdBy: by?.name };
     this.data.staff.push(rec);
     await this.save();
     return { staff: this.publicStaff(rec), token };

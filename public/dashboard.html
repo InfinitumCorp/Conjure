@@ -160,7 +160,8 @@
     </table></div>
     <form class="row" id="staffForm">
       <label class="label">Name<input type="text" id="sName" required></label>
-      <label class="label">Email<input type="email" id="sEmail"></label>
+      <label class="label">Cumulus ID email<input type="email" id="sEmail"></label>
+      <label class="label">or CID<input type="text" id="sCid" autocomplete="off"></label>
       <label class="label">Role<select id="sRole"><option value="staff">Staff (view, try)</option><option value="admin">Admin (keys, staff)</option></select></label>
       <button class="btn-primary">Add staff</button>
     </form>
@@ -243,7 +244,7 @@ function render() {
     $("staffRows").innerHTML = (d.staff || []).length ? d.staff.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.email || "—")}</td><td>${esc(s.role)}</td>
       <td><code>${esc(s.prefix)}…</code>${s.revokedAt ? `<div class="sub">revoked</div>` : ""}</td><td>${esc(when(s.createdAt))}</td>
       <td>${s.revokedAt ? "" : `<button class="btn-secondary" data-unstaff="${esc(s.id)}">Revoke</button>`}</td></tr>`).join("")
-      : `<tr><td colspan="6" class="empty">Only the owner token so far. Add each staff member so access can be revoked one person at a time.</td></tr>`;
+      : `<tr><td colspan="6" class="empty">Only the owner so far. Add each staff member so access can be revoked one person at a time.</td></tr>`;
   }
 }
 
@@ -338,8 +339,8 @@ $("productForm").addEventListener("submit", async (e) => {
 $("staffForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
-    const r = await api("/api/admin/staff", { method: "POST", body: JSON.stringify({ name: $("sName").value, email: $("sEmail").value, role: $("sRole").value }) });
-    showSecret($("staffSecret"), `Sign-in token for ${r.staff.name}`, r.token, "Shown once. Give it to them privately; they sign in with it on this server.");
+    const r = await api("/api/admin/staff", { method: "POST", body: JSON.stringify({ name: $("sName").value, email: $("sEmail").value, cid: $("sCid").value, role: $("sRole").value }) });
+    showSecret($("staffSecret"), `Script token for ${r.staff.name}`, r.token, "Shown once, for scripts only. People sign in here with their Cumulus ID.");
     $("staffForm").reset(); refresh();
   } catch (err) { alert(err.message); }
 });
