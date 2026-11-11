@@ -211,7 +211,9 @@ function render() {
   $("staff").hidden = $("staffLink").hidden = !admin;
   $("productForm").hidden = !admin;
   $("stats").innerHTML = [
-    stat("Mode", d.live ? "Live" : "Offline mock"), stat("Model", d.live ? d.model : "mock"),
+    stat("Mode", d.live ? "Live" : "Offline mock"), stat("Model", d.live ? String(d.model).replace(/^@cf\/[^/]+\//, "") : "mock"),
+    // The free Workers AI allowance shared by the account (resets 00:00 UTC); a forecast uses about 300.
+    ...(d.allowance ? [stat("Free model allowance left today", `${Math.round(d.allowance.remaining).toLocaleString()} of ${d.allowance.limit.toLocaleString()} (≈${Math.floor(d.allowance.remaining / 300)} forecasts)`)] : []),
     stat("Running", `${d.queue.running} of ${d.queue.concurrency}`), stat("Queued", d.queue.queued),
     stat("Forecasts, 24 h", d.day.total), stat("Succeeded, 24 h", pct(d.day.successRate)),
     stat("Average time", secs(d.day.avgMs)), stat("Products live", d.products.filter((p) => !p.revokedAt).length),

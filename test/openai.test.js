@@ -73,3 +73,15 @@ test("a JSON step with broken syntax is asked again and the fixed reply is retur
   assert.equal(seen.length, 2);
   assert.match(seen[1].body.messages.at(-1).content, /not valid JSON/);
 });
+
+test("modelUsage reads the gateway's ledger and is null when unreachable", async () => {
+  const { modelUsage } = await import("../src/predict/openai.js");
+  const ok = await modelUsage({ baseUrl: "http://g/v1", apiKey: "k", fetchImpl: async (url, init) => {
+    assert.equal(url, "http://g/v1/usage");
+    assert.equal(init.headers.authorization, "Bearer k");
+    return new Response(JSON.stringify({ day: "2026-11-11", used: 565.7, limit: 9500, remaining: 8934.3 }));
+  } });
+  assert.equal(ok.remaining, 8934.3);
+  assert.equal(await modelUsage({ baseUrl: "http://g/v1", fetchImpl: async () => { throw new Error("down"); } }), null);
+  assert.equal(await modelUsage({ baseUrl: "" }), null);
+});

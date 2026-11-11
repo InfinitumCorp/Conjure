@@ -35,6 +35,22 @@ async function chat({ baseUrl, model, apiKey, fetchImpl = fetch }, body) {
 
 const JSON_RETRIES = 2;
 
+/** Today's free model allowance from the conjure-llm gateway ({day, used, limit, remaining}), or null. */
+export async function modelUsage({ baseUrl = (process.env.CONJURE_LLM_URL || "").replace(/\/+$/, ""), apiKey = process.env.CONJURE_LLM_KEY || "", fetchImpl = fetch } = {}) {
+  if (!baseUrl) return null;
+  try {
+    const res = await fetchImpl(`${baseUrl}/usage`, {
+      headers: { ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...ACCESS },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const u = await res.json();
+    return typeof u?.used === "number" && typeof u?.limit === "number" ? u : null;
+  } catch {
+    return null;
+  }
+}
+
 /** One-shot text completion, the shape the simulation steps use. */
 export function openaiComplete(cfg) {
   return async (system, user, opts) => {

@@ -11,6 +11,7 @@ import { makeProvider, hasCredentials, DEFAULT_OUT } from "./config.js";
 import { zipDeliverable } from "./zip.js";
 import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
 import { PredictionService, publicView } from "./predict/service.js";
+import { modelUsage } from "./predict/openai.js";
 import { ConjureError as PredictError } from "./predict/vendor/conjure.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -337,8 +338,11 @@ async function handleAdmin(req, res, url, who) {
       const products = access.listProducts().map((k) => ({ ...k, day: summarize(recentFor(k.slug)), week: summarize(recentFor(k.slug, 7 * DAY)) }));
       return json(res, 200, {
         me: { name: who.name, role: who.role },
-        live: Boolean(process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1",
-        model: process.env.CONJURE_PREDICT_MODEL || process.env.CONJURE_MODEL || "claude-opus-5-5",
+        live: Boolean(process.env.CONJURE_LLM_URL || process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1",
+        model: process.env.CONJURE_LLM_URL
+          ? process.env.CONJURE_LLM_MODEL || "qwen2.5:3b"
+          : process.env.CONJURE_PREDICT_MODEL || process.env.CONJURE_MODEL || "claude-opus-5-5",
+        allowance: await modelUsage(),
         queue: predictions.stats(), builderBusy: Boolean(current),
         day: summarize(last24), week: summarize(all.filter((r) => Date.now() - Date.parse(r.createdAt) < 7 * DAY)),
         products, known: KNOWN_PRODUCTS,
