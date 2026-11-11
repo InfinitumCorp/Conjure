@@ -13,6 +13,13 @@
 
 export const CONJURE_CLIENT_VERSION = "1.0.0";
 
+const GEO_ON = /^(1|true|on|yes)$/i;
+
+/** Product-side opt-in. Off unless INFINITUM_GEO_ENABLED is set, so mentions are unchanged. */
+export function infinitumGeoEnabled(env = globalThis.process?.env ?? {}) {
+  return GEO_ON.test(String(env?.INFINITUM_GEO_ENABLED ?? ""));
+}
+
 export class ConjureApiError extends Error {
   constructor(message, status, body) {
     super(message);
@@ -94,8 +101,11 @@ export function createConjure({ url, key, fetch: fetchImpl = globalThis.fetch, t
     health: (signal) => call("GET", "/v1/health", undefined, signal),
 
     /** Starts a prediction and returns at once: { id, status, ... }. */
-    start: ({ question, context, user, agents, rounds, source } = {}, signal) =>
-      call("POST", "/v1/predictions", { question, context, user, agents, rounds, source }, signal),
+    start: ({ question, context, user, agents, rounds, source, clientIp } = {}, signal) => {
+      const body = { question, context, user, agents, rounds, source };
+      if (clientIp) body.clientIp = clientIp;
+      return call("POST", "/v1/predictions", body, signal);
+    },
 
     get: (id, signal) => call("GET", `/v1/predictions/${encodeURIComponent(id)}`, undefined, signal),
 
@@ -121,8 +131,8 @@ export function createConjure({ url, key, fetch: fetchImpl = globalThis.fetch, t
     },
 
     /** Runs a prediction to the end. */
-    async predict(question, { context, user, agents, rounds, source, onProgress, signal, timeoutMs: limit } = {}) {
-      const started = await api.start({ question, context, user, agents, rounds, source }, signal);
+    async predict(question, { context, user, agents, rounds, source, clientIp, onProgress, signal, timeoutMs: limit } = {}) {
+      const started = await api.start({ question, context, user, agents, rounds, source, clientIp }, signal);
       return api.wait(started.id, { onProgress, signal, timeoutMs: limit });
     },
 
@@ -131,12 +141,13 @@ export function createConjure({ url, key, fetch: fetchImpl = globalThis.fetch, t
      * otherwise { prediction, text } where text is a ready-to-post reply.
      * Set wait: false to get the started prediction back immediately and poll yourself.
      */
-    async handleMention(text, { context = "", user, source, agents, rounds, wait = true, onProgress, signal } = {}) {
+    async handleMention(text, { context = "", user, source, agents, rounds, clientIp, wait = true, onProgress, signal } = {}) {
       const m = parseConjureMention(text);
       if (!m) return null;
       if (!m.question) return { prediction: null, text: "Ask Conjure™ a question after @conjure, for example: @conjure will the Acme deal close this quarter?" };
       const ctx = [m.context, context].filter(Boolean).join("\n\n").slice(0, 30000);
       const opts = { question: m.question, context: ctx, user, source, agents, rounds };
+      if (infinitumGeoEnabled() && typeof clientIp === "string" && clientIp.trim()) opts.clientIp = clientIp.trim().slice(0, 64);
       const prediction = wait ? await api.predict(m.question, { ...opts, onProgress, signal }) : await api.start(opts, signal);
       return { prediction, text: formatForecast(prediction) };
     },
@@ -189,7 +200,8 @@ export function createConjureRoutes({ conjure, secret, prefix = "/api/conjure", 
         if (!body || typeof body.text !== "string" || body.text.length > 32000) return reply(400, { error: "text is required" });
         const context = [typeof body.context === "string" ? body.context : "", extraContext || ""].filter(Boolean).join("\n\n").slice(0, 30000);
         const source = typeof body.source === "string" ? body.source.slice(0, 60) : defaultSource;
-        const out = await conjure.handleMention(body.text, { context, user: owner, source, wait: false });
+        const clientIp = infinitumGeoEnabled() && typeof body.clientIp === "string" ? body.clientIp : undefined;
+        const out = await conjure.handleMention(body.text, { context, user: owner, source, wait: false, clientIp });
         if (!out) return reply(200, { mention: false });
         const ticket = out.prediction ? `${out.prediction.id}.${await mac(secret, `${out.prediction.id}|${owner}`)}` : null;
         return reply(200, { mention: true, text: out.text, ticket, prediction: out.prediction });

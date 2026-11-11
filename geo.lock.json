@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "publisher": "v2fly",
+  "files": [
+    {
+      "name": "geoip.dat",
+      "tag": "202611080027",
+      "url": "https://github.com/v2fly/geoip/releases/download/202611080027/geoip.dat",
+      "sha256sumUrl": "https://github.com/v2fly/geoip/releases/download/202611080027/geoip.dat.sha256sum",
+      "sha256": "eedb24b3b9fcba27e06b92c0428dab90d9496083091ae4cf39e11387fd99d0e2",
+      "license": "CC-BY-SA-4.0"
+    },
+    {
+      "name": "geosite.dat",
+      "upstream": "dlc.dat",
+      "tag": "20261108011013",
+      "url": "https://github.com/v2fly/domain-list-community/releases/download/20261108011013/dlc.dat",
+      "sha256sumUrl": "https://github.com/v2fly/domain-list-community/releases/download/20261108011013/dlc.dat.sha256sum",
+      "sha256": "dc4192dd1b644a38276ed06136d26e729fa674d25785adb38c87e040e92376b2",
+      "license": "MIT"
+    }
+  ]
+}

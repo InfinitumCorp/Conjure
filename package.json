@@ -7,7 +7,8 @@
     "start": "node src/server.js",
     "conjure": "node src/cli.js",
     "test": "node --test test/",
-    "eval": "node eval/run.js"
+    "eval": "node eval/run.js",
+    "geo:fetch": "node scripts/fetch-geo.mjs"
   },
   "license": "ISC",
   "type": "module",

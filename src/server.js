@@ -14,6 +14,8 @@ import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
 import { PredictionService, publicView } from "./predict/service.js";
 import { modelUsage } from "./predict/openai.js";
 import { ConjureError as PredictError } from "./predict/vendor/conjure.ts";
+import { annotate, chooseClientIp, geoDataDir, geoEnabled } from "./geo.js";
+import { SettingsStore } from "./settings.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.resolve(here, "..", "public");
@@ -34,10 +36,29 @@ const MOCK_DELAY = Number(process.env.CONJURE_MOCK_DELAY || 0);
 // Staff, product keys, predictions and usage. Kept outside OUT: the preview server serves OUT.
 const DATA = path.resolve(process.env.CONJURE_DATA || "conjure-data");
 const access = await new AccessStore({ file: path.join(DATA, "access.json"), ownerToken: ACCESS_TOKEN }).load();
+const settings = await new SettingsStore(path.join(DATA, "settings.json")).load();
+let geoWarned = false;
+function geoAnnotation(req, body, text) {
+  if (!geoEnabled(process.env, settings.geoRouting)) return null;
+  try {
+    const found = annotate({ dir: geoDataDir(), ip: chooseClientIp(body?.clientIp, req.socket?.remoteAddress), text });
+    if (found) console.log(`geo route ${found.route}`);
+    return found;
+  } catch (err) {
+    if (!geoWarned) {
+      geoWarned = true;
+      console.error(`geo datasets unavailable: ${err.message}`);
+    }
+    return null;
+  }
+}
 const predictions = new PredictionService({
   dir: path.join(DATA, "predictions"),
   delayMs: MOCK_DELAY,
-  onFinish: (rec) => access.logUsage({ kind: "prediction", id: rec.id, product: rec.product, user: rec.user, status: rec.status, ms: rec.ms, calls: rec.sim?.calls ?? 0, mode: rec.mode }),
+  onFinish: (rec) => access.logUsage({
+    kind: "prediction", id: rec.id, product: rec.product, user: rec.user, status: rec.status, ms: rec.ms, calls: rec.sim?.calls ?? 0, mode: rec.mode,
+    ...(rec.geo ? { geo: rec.geo } : {}),
+  }),
 });
 await predictions.load();
 
@@ -212,7 +233,7 @@ function friendly(err) {
 }
 
 /** Streams a run's events as server-sent events; aborts the run if the client disconnects. */
-async function runJob(req, res, mock, flaw, job, label) {
+async function runJob(req, res, mock, flaw, job, label, geo) {
   if (current) return res.writeHead(409).end("a run is already in progress");
   const controller = new AbortController();
   current = { controller, label, startedAt: new Date().toISOString() };
@@ -227,6 +248,7 @@ async function runJob(req, res, mock, flaw, job, label) {
   const send = (e) => !res.writableEnded && res.write(`data: ${JSON.stringify(e)}\n\n`);
   const provider = makeProvider({ mock: mock ? true : undefined, flaw: Boolean(flaw), delayMs: MOCK_DELAY });
   send({ type: "start", provider: provider.name, model: provider.model });
+  if (geo) send({ type: "geo", country: geo.country, categories: geo.categories, route: geo.route });
 
   const onEvent = (e) => {
     if (e.type === "error") return; // reported below with a friendly message
@@ -297,7 +319,7 @@ async function handleV1(req, res, url, who) {
       return json(res, 429, { error: `daily limit of ${who.dailyLimit} forecasts reached for ${product}` });
     }
     try {
-      const rec = await predictions.create({ ...body, product, user: body.user, mock: who.kind === "staff" ? body.mock : false });
+      const rec = await predictions.create({ ...body, product, user: body.user, mock: who.kind === "staff" ? body.mock : false, geo: geoAnnotation(req, body, `${body.question || ""}\n${body.context || ""}`) });
       if (who.kind === "product") access.touchProduct(who.record);
       return json(res, 202, publicView(rec));
     } catch (err) {
@@ -427,6 +449,18 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && (url.pathname === "/studio" || url.pathname === "/index.html")) {
     return serveFile(res, path.join(PUBLIC, "index.html"));
   }
+  if (req.method === "GET" && url.pathname === "/api/settings") return json(res, 200, settings.view());
+  if (req.method === "POST" && url.pathname === "/api/settings") {
+    let payload;
+    try {
+      payload = await readJson(req);
+    } catch {
+      return json(res, 400, { error: "invalid JSON" });
+    }
+    if (!payload || typeof payload.geoRouting !== "boolean") return json(res, 400, { error: "geoRouting must be true or false" });
+    await settings.setGeoRouting(payload.geoRouting);
+    return json(res, 200, settings.view());
+  }
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, {
       live: hasCredentials(), busy: Boolean(current), previewOrigin: PREVIEW_ORIGIN,
@@ -470,7 +504,7 @@ const server = http.createServer(async (req, res) => {
         return res.writeHead(400).end("intent must be a non-empty string under 4000 chars");
       }
       return runJob(req, res, payload.mock, payload.flaw, (provider, signal, onEvent) =>
-        conjure({ intent: payload.intent, provider, outDir: OUT, signal, onEvent }), payload.intent.slice(0, 120));
+        conjure({ intent: payload.intent, provider, outDir: OUT, signal, onEvent }), payload.intent.slice(0, 120), geoAnnotation(req, payload, payload.intent));
     }
     const dir = typeof payload.dir === "string" && !payload.dir.includes("/") && !payload.dir.includes("\\") ? confined(OUT, payload.dir) : null;
     if (!dir) return res.writeHead(400).end("dir must name a deliverable folder");
@@ -478,7 +512,7 @@ const server = http.createServer(async (req, res) => {
       return res.writeHead(400).end("change must be a non-empty string under 4000 chars");
     }
     return runJob(req, res, payload.mock, false, (provider, signal, onEvent) =>
-      refine({ dir, change: payload.change, provider, signal, onEvent }), `refine ${payload.dir}: ${payload.change.slice(0, 100)}`);
+      refine({ dir, change: payload.change, provider, signal, onEvent }), `refine ${payload.dir}: ${payload.change.slice(0, 100)}`, geoAnnotation(req, payload, payload.change));
   }
   res.writeHead(404).end("not found");
 });

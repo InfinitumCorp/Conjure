@@ -5,3 +5,4 @@ conjured/
 android/build/
 .conjure-access-token
 conjure-data/
+data/geo/

@@ -11,6 +11,19 @@ import { openaiComplete, openaiAsAnthropicFetch } from "./openai.js";
 
 const MAX_QUESTION = 500;
 const MAX_CONTEXT = 30000;
+const GEO_TAG = /^[A-Za-z0-9_.:@!+-]{1,64}$/;
+
+/** Keeps a server-built geo annotation. Drops anything that is not a route label. */
+function storedGeo(geo) {
+  if (!geo || typeof geo !== "object") return undefined;
+  const country = typeof geo.country === "string" && GEO_TAG.test(geo.country) ? geo.country : null;
+  const categories = Array.isArray(geo.categories)
+    ? [...new Set(geo.categories.filter((c) => typeof c === "string" && GEO_TAG.test(c)))].slice(0, 32)
+    : [];
+  const route = typeof geo.route === "string" && /^(country|category):[A-Za-z0-9_.:@!+-]{1,64}$/.test(geo.route) ? geo.route : null;
+  if (!route) return undefined;
+  return { country, categories, route };
+}
 
 function modelSetup({ mock, delayMs }) {
   const apiKey = process.env.ANTHROPIC_API_KEY || "";
@@ -37,6 +50,7 @@ export function publicView(rec, { full = false } = {}) {
     poles: sim?.poles, stats: sim?.stats ?? [], report: sim?.report ? { ...sim.report, steps: undefined } : undefined,
     calls: sim?.calls ?? 0, maxCalls: sim?.maxCalls,
   };
+  if (rec.geo) view.geo = rec.geo;
   if (full && sim) {
     view.summary = sim.seedSummary;
     view.entities = sim.entities;
@@ -93,7 +107,7 @@ export class PredictionService extends EventEmitter {
   }
 
   /** Validates input and queues a run. Throws ConjureError for bad input. */
-  async create({ product, user, source, question, context, agents, rounds, mock }) {
+  async create({ product, user, source, question, context, agents, rounds, mock, geo }) {
     const q = typeof question === "string" ? question.trim() : "";
     if (!q) throw new ConjureError("Ask a question after @conjure");
     if (q.length > MAX_QUESTION) throw new ConjureError(`Keep the question under ${MAX_QUESTION} characters`);
@@ -107,6 +121,8 @@ export class PredictionService extends EventEmitter {
       agents: a, rounds: r, mock: Boolean(mock), status: "queued", createdAt: new Date().toISOString(),
       estimate: estimateCalls(a, r).calls,
     };
+    const clean = storedGeo(geo);
+    if (clean) rec.geo = clean;
     this.records.set(rec.id, rec);
     await this.save(rec);
     this.queue.push(rec);

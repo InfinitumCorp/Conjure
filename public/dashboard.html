@@ -104,6 +104,7 @@
 <main id="main">
   <section class="block" aria-labelledby="status-title">
     <h2 id="status-title">Status</h2>
+    <label class="check"><input type="checkbox" id="geo"> Geo routing</label>
     <div class="stats" id="stats"></div>
   </section>
 
@@ -248,15 +249,27 @@ function render() {
   }
 }
 
-async function refresh() {
-  try { data = await api("/api/admin/overview"); render(); } catch (e) { if (e.message !== "signed out") $("stats").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+async function loadGeoToggle() {
+  try {
+    const g = await api("/api/settings");
+    $("geo").checked = g.geoRouting === true;
+  } catch {}
 }
+async function refresh() {
+  try { data = await api("/api/admin/overview"); render(); await loadGeoToggle(); } catch (e) { if (e.message !== "signed out") $("stats").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+$("geo").addEventListener("change", async () => {
+  const on = $("geo").checked;
+  try { await api("/api/settings", { method: "POST", body: JSON.stringify({ geoRouting: on }) }); }
+  catch (err) { $("geo").checked = !on; alert(err.message); }
+});
 
 function forecastHtml(v) {
   const r = v.report;
   const last = v.stats.at(-1);
-  const head = `<h3>${esc(v.question)}</h3><div class="sub label">${esc(v.product)} · ${esc(v.status)}${v.mode === "mock" ? " · offline mock" : ""} · ${v.agents} agents · round ${v.round} of ${v.rounds}</div>
+  let head = `<h3>${esc(v.question)}</h3><div class="sub label">${esc(v.product)} · ${esc(v.status)}${v.mode === "mock" ? " · offline mock" : ""} · ${v.agents} agents · round ${v.round} of ${v.rounds}</div>
     <div class="bar" aria-hidden="true"><span style="width:${Math.round(((v.round + (r ? 1 : 0)) / (v.rounds + 1)) * 100)}%"></span></div>`;
+  if (v.geo?.route) head += `<div class="label">Geo route ${esc(v.geo.route)}</div>`;
   const trend = v.stats.length > 1 ? `<div class="trend" aria-label="Stance by round">${v.stats.map((s) => `<div class="r"><span>Round ${s.round}</span>
     <div class="split" title="for ${pct(s.split.for)}, undecided ${pct(s.split.undecided)}, against ${pct(s.split.against)}"><span style="width:${s.split.for * 100}%"></span><span style="width:${s.split.undecided * 100}%"></span><span style="width:${s.split.against * 100}%"></span></div>
     <span>${pct(s.split.for)} for</span></div>`).join("")}</div>` : "";
