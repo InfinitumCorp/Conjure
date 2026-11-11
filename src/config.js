@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ClaudeProvider, MockProvider, DEFAULT_MODEL } from "./providers.js";
+import { ClaudeProvider, MockProvider, OpenWeightsProvider, DEFAULT_MODEL } from "./providers.js";
 
 // Load the project's .env (if present) so credentials can live in a git-ignored file.
 // Variables already set in the environment win.
@@ -12,9 +12,20 @@ export function hasCredentials() {
   return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE);
 }
 
+/** A keyless open-weight server is configured when its URL (or model) is set. */
+export function openWeightsConfigured() {
+  return Boolean(process.env.CONJURE_OPEN_WEIGHTS_URL || process.env.CONJURE_OPEN_WEIGHTS_MODEL);
+}
+
 export function makeProvider({ mock, model, flaw, delayMs } = {}) {
-  const useMock = mock ?? (process.env.CONJURE_MOCK === "1" || !hasCredentials());
+  // Claude stays first choice; the keyless open-weight server is the fallback
+  // before the offline mock, so Conjure forges for real with zero API keys.
+  const forcedOpenWeights = process.env.CONJURE_PROVIDER === "open-weights";
+  const useMock = mock ?? (process.env.CONJURE_MOCK === "1" || (!hasCredentials() && !openWeightsConfigured() && !forcedOpenWeights));
   if (useMock) return new MockProvider({ flaw, delayMs });
+  if (!hasCredentials() || forcedOpenWeights) {
+    return new OpenWeightsProvider({ model: model || process.env.CONJURE_OPEN_WEIGHTS_MODEL });
+  }
   return new ClaudeProvider({
     model: model || process.env.CONJURE_MODEL || DEFAULT_MODEL,
     fallbacks: process.env.CONJURE_FALLBACKS !== "0",

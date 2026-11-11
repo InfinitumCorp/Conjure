@@ -146,6 +146,107 @@ export class MockProvider {
   }
 }
 
+// ---------------------------------------------------------------------------- Open weights
+
+/**
+ * Keyless open-weight models for the forge loop: Ollama, llama.cpp, vLLM, LM
+ * Studio or any other OpenAI-compatible /chat/completions server, run on
+ * hardware Infinitum controls. No API key is needed or sent; `apiKey` stays
+ * optional only for gateways that insist on a bearer header.
+ *
+ * Speaks the same Anthropic-shaped messages as ClaudeProvider, so the engine
+ * never needs to know which one it is talking to. Non-streamed (like
+ * MockProvider): the final text is handed to onText once, when it arrives.
+ */
+export const OPEN_WEIGHTS_DEFAULT_MODEL = "qwen3:8b";
+
+export class OpenWeightsProvider {
+  /** @param {object} [o] */
+  constructor({ baseUrl, model, apiKey, fetchImpl = fetch, timeoutMs = 600_000 } = {}) {
+    this.name = "open-weights";
+    this.baseUrl = (baseUrl || process.env.CONJURE_OPEN_WEIGHTS_URL || "http://localhost:11434/v1").replace(/\/+$/, "");
+    this.model = model || process.env.CONJURE_OPEN_WEIGHTS_MODEL || process.env.CONJURE_MODEL || OPEN_WEIGHTS_DEFAULT_MODEL;
+    this.apiKey = apiKey ?? process.env.CONJURE_OPEN_WEIGHTS_KEY ?? "";
+    this.fetchImpl = fetchImpl;
+    this.timeoutMs = timeoutMs;
+  }
+
+  /**
+   * One model turn, same contract as ClaudeProvider.turn().
+   * @param {object} p
+   */
+  async turn({ system, messages, tools, jsonSchema, onText, phase, signal }) {
+    const body = {
+      model: this.model,
+      max_tokens: 64_000,
+      messages: openWeightsMessages(system, messages),
+      ...(tools?.length ? { tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })) } : {}),
+      // Structured output for the plan step. Servers that predate response_format
+      // (older llama.cpp) still answer; the plan is parsed and retried upstream.
+      ...(jsonSchema ? { response_format: { type: "json_schema", json_schema: { name: "output", schema: jsonSchema } } } : {}),
+    };
+    const res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}) },
+      body: JSON.stringify(body),
+      signal: signal ?? AbortSignal.timeout(this.timeoutMs),
+    });
+    if (!res.ok) throw await openWeightsFailure(res);
+    const out = await res.json();
+    const msg = out.choices?.[0]?.message ?? {};
+    // Some servers inline the model's thinking; the engine only wants the answer.
+    const text = String(msg.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    if (text && onText) onText(text, phase);
+    const content = [];
+    if (text) content.push({ type: "text", text });
+    for (const c of msg.tool_calls ?? []) {
+      let input = {};
+      try {
+        input = typeof c.function?.arguments === "string" ? JSON.parse(c.function.arguments || "{}") : c.function?.arguments ?? {};
+      } catch {
+        input = {};
+      }
+      content.push({ type: "tool_use", id: c.id || `toolu_ow_${++openWeightsCall}`, name: c.function?.name ?? "", input });
+    }
+    return {
+      role: "assistant",
+      content,
+      stop_reason: content.some((b) => b.type === "tool_use") ? "tool_use" : "end_turn",
+      usage: { input_tokens: out.usage?.prompt_tokens ?? 0, output_tokens: out.usage?.completion_tokens ?? 0 },
+    };
+  }
+}
+
+let openWeightsCall = 0;
+
+/** The model server's own error message, so a used-up allowance reads as such. */
+async function openWeightsFailure(res) {
+  const body = await res.json().catch(() => null);
+  return Object.assign(new Error(body?.error?.message || `Model server error ${res.status}`), { status: res.status });
+}
+
+/** Anthropic messages (system + text/tool_use/tool_result blocks) → OpenAI chat messages. */
+function openWeightsMessages(system, messages) {
+  const out = [{ role: "system", content: system ?? "" }];
+  for (const m of messages ?? []) {
+    if (typeof m.content === "string") {
+      out.push({ role: m.role, content: m.content });
+    } else if (m.role === "assistant") {
+      const text = m.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      const calls = m.content
+        .filter((b) => b.type === "tool_use")
+        .map((b) => ({ id: b.id, type: "function", function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } }));
+      out.push({ role: "assistant", content: text, ...(calls.length ? { tool_calls: calls } : {}) });
+    } else {
+      for (const b of m.content) {
+        if (b.type === "tool_result") out.push({ role: "tool", tool_call_id: b.tool_use_id, content: String(b.content) });
+        else if (b.type === "text") out.push({ role: "user", content: b.text });
+      }
+    }
+  }
+  return out;
+}
+
 let mockId = 0;
 function toolTurn(calls) {
   return {
