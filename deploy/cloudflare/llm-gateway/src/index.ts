@@ -17,20 +17,7 @@ interface Env {
   DAILY_NEURONS: string;
 }
 
-/** Neurons per million tokens [input, output]. Unknown models use the most expensive listed rate. */
-const RATES: Record<string, [number, number]> = {
-  "@cf/qwen/qwen3-30b-a3b-fp8": [4625, 30475],
-  "@cf/meta/llama-3.1-8b-instruct-fp8-fast": [4119, 34868],
-  "@cf/meta/llama-3.2-3b-instruct": [4625, 30475],
-  "@cf/meta/llama-3.3-70b-instruct-fp8-fast": [26668, 204805],
-  "@cf/openai/gpt-oss-20b": [18182, 27273],
-  "@cf/openai/gpt-oss-120b": [31818, 68182],
-};
-const rate = (model: string) => RATES[model] ?? [31818, 204805];
-const neuronsFor = (model: string, input: number, output: number) => {
-  const [i, o] = rate(model);
-  return (input * i + output * o) / 1_000_000;
-};
+import { budgetedAI, FreeAllowanceUsed } from "./ai-budget.js";
 
 const day = () => new Date().toISOString().slice(0, 10);
 
@@ -123,31 +110,20 @@ export default {
     if (Array.isArray(body.tools) && body.tools.length) input.tools = body.tools;
     if (typeof body.temperature === "number") input.temperature = body.temperature;
 
-    // Worst case: every input character a token (real text runs ~4 per token) plus a full-length reply.
-    const inputChars = JSON.stringify(messages).length + JSON.stringify(input.tools ?? []).length;
-    const reserved = neuronsFor(model, inputChars, maxTokens);
-    const key = day();
-    const hold = await budget().reserve(limit, reserved);
-    if (!hold.ok) {
-      return json(
-        { error: { type: "free_allowance_used", message: `Conjure's free daily model allowance is used up. It resets at 00:00 UTC.` } },
-        429,
-        { "retry-after": String(untilMidnightUtc()) },
-      );
-    }
-
-    let actual = reserved;
+    // Every call goes through the account-wide ledger (shared with the other Workers that use Workers AI).
+    const ai = budgetedAI(env.AI, ctx.exports.Budget, { limit, waitUntil: (p) => ctx.waitUntil(p) });
     try {
-      const out = toOpenAI(await env.AI.run(model, input), model);
-      const u = out.usage ?? {};
-      actual = typeof u.neurons === "number" ? u.neurons : neuronsFor(model, u.prompt_tokens ?? inputChars, u.completion_tokens ?? maxTokens);
-      return json(out);
+      return json(toOpenAI(await ai.run(model, input), model));
     } catch (err) {
+      if (err instanceof FreeAllowanceUsed) {
+        return json(
+          { error: { type: "free_allowance_used", message: "Conjure's free daily model allowance is used up. It resets at 00:00 UTC." } },
+          429,
+          { "retry-after": String(untilMidnightUtc()) },
+        );
+      }
       const message = (err as Error).message || "Model error";
-      actual = 0; // a failed call is not billed
       return json({ error: { message } }, /limit|quota|neuron|capacity/i.test(message) ? 429 : 502);
-    } finally {
-      ctx.waitUntil(budget().settle(key, reserved, actual));
     }
   },
 };
