@@ -281,7 +281,8 @@ async function handleV1(req, res, url, who) {
   const m = /^\/v1\/predictions(?:\/([\w-]+))?(?:\/(events|interview|cancel))?$/.exec(url.pathname);
 
   if (req.method === "GET" && url.pathname === "/v1/health") {
-    const live = Boolean(process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1";
+    // Live on open-weight models (CONJURE_LLM_URL) as well as on Claude, the same test as the dashboard's.
+    const live = Boolean(process.env.CONJURE_LLM_URL || process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1";
     return json(res, 200, { ok: true, product, live, ...predictions.stats() });
   }
   if (!m) return json(res, 404, { error: "not found" });
