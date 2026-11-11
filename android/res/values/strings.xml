@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Source strings for @infinitum/i18n. Translations in values-<lang>/ are generated
+     by infinitum-nexus packages/i18n/scripts/translate.ts (android mode, android/res). -->
+<resources>
+    <string name="app_name">Conjure</string>
+    <string name="enter_http_address">Enter an http:// or https:// address</string>
+    <string name="downloading">Downloading %1$s</string>
+    <string name="download_failed">Download failed: %1$s</string>
+    <string name="offline_title">Can\'t reach Conjure</string>
+    <string name="offline_help">Check your connection and that the server is running. For a server on your computer, run %1$s and connect this phone with %2$s and %3$s.</string>
+    <string name="retry">Retry</string>
+    <string name="other_server">Or use another server:</string>
+    <string name="server_address">Server address</string>
+    <string name="use_this_server">Use this server</string>
+</resources>
