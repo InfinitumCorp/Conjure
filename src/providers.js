@@ -166,12 +166,22 @@ export class OpenWeightsProvider {
   /** @param {object} [o] */
   constructor({ baseUrl, model, apiKey, fetchImpl = fetch, timeoutMs = 600_000 } = {}) {
     this.name = "open-weights";
+    const env = process.env;
+    // With no open-weight server of its own, the forge loop uses the conjure-llm gateway that
+    // predictions already use (CONJURE_LLM_*): free open-weight models, Cloudflare Access included.
+    this.viaGateway = !baseUrl && !env.CONJURE_OPEN_WEIGHTS_URL && Boolean(env.CONJURE_LLM_URL);
     // CONJURE_OPEN_WEIGHTS_URL (or the constructor's baseUrl) may list several
     // interchangeable servers, comma-separated; requests fail over down the list.
-    this.urls = parseUrls(baseUrl || process.env.CONJURE_OPEN_WEIGHTS_URL, ["http://localhost:11434/v1"]);
+    this.urls = parseUrls(baseUrl || env.CONJURE_OPEN_WEIGHTS_URL || (this.viaGateway ? env.CONJURE_LLM_URL : ""), ["http://localhost:11434/v1"]);
     this.baseUrl = this.urls[0];
-    this.model = model || process.env.CONJURE_OPEN_WEIGHTS_MODEL || process.env.CONJURE_MODEL || OPEN_WEIGHTS_DEFAULT_MODEL;
-    this.apiKey = apiKey ?? process.env.CONJURE_OPEN_WEIGHTS_KEY ?? "";
+    this.model = model || env.CONJURE_OPEN_WEIGHTS_MODEL || (this.viaGateway ? env.CONJURE_LLM_MODEL : "") || env.CONJURE_MODEL || OPEN_WEIGHTS_DEFAULT_MODEL;
+    this.apiKey = apiKey ?? env.CONJURE_OPEN_WEIGHTS_KEY ?? (this.viaGateway ? env.CONJURE_LLM_KEY ?? "" : "");
+    this.extraHeaders =
+      this.viaGateway && env.CONJURE_LLM_ACCESS_ID && env.CONJURE_LLM_ACCESS_SECRET
+        ? { "cf-access-client-id": env.CONJURE_LLM_ACCESS_ID, "cf-access-client-secret": env.CONJURE_LLM_ACCESS_SECRET }
+        : {};
+    // "none" skips Qwen3's thinking so the token budget goes to the answer.
+    this.reasoning = this.viaGateway ? env.CONJURE_LLM_REASONING || "" : "";
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
   }
@@ -215,10 +225,11 @@ export class OpenWeightsProvider {
       // Structured output for the plan step. Servers that predate response_format
       // (older llama.cpp) still answer; the plan is parsed and retried upstream.
       ...(jsonSchema ? { response_format: { type: "json_schema", json_schema: { name: "output", schema: jsonSchema } } } : {}),
+      ...(this.reasoning ? { reasoning_effort: this.reasoning } : {}),
     };
     const res = await this.fetch("/chat/completions", {
       method: "POST",
-      headers: { "content-type": "application/json", ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}) },
+      headers: { "content-type": "application/json", ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}), ...this.extraHeaders },
       body: JSON.stringify(body),
       signal: signal ?? AbortSignal.timeout(this.timeoutMs),
     });

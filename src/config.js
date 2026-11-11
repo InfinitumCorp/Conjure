@@ -12,9 +12,10 @@ export function hasCredentials() {
   return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE);
 }
 
-/** A keyless open-weight server is configured when its URL (or model) is set. */
+/** An open-weight server is configured when its URL (or model) is set, or the conjure-llm
+ *  gateway that predictions use is (CONJURE_LLM_URL), which the forge loop then shares. */
 export function openWeightsConfigured() {
-  return Boolean(process.env.CONJURE_OPEN_WEIGHTS_URL || process.env.CONJURE_OPEN_WEIGHTS_MODEL);
+  return Boolean(process.env.CONJURE_OPEN_WEIGHTS_URL || process.env.CONJURE_OPEN_WEIGHTS_MODEL || process.env.CONJURE_LLM_URL);
 }
 
 export function makeProvider({ mock, model, flaw, delayMs } = {}) {

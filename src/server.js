@@ -13,6 +13,7 @@ import { cidConfig, startSignIn, finishSignIn, clearPending } from "./cid.js";
 import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
 import { PredictionService, publicView } from "./predict/service.js";
 import { modelUsage } from "./predict/openai.js";
+import { GuessGuard, clientIp } from "./guard.js";
 import { ConjureError as PredictError } from "./predict/vendor/conjure.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ const MOCK_DELAY = Number(process.env.CONJURE_MOCK_DELAY || 0);
 // Staff, product keys, predictions and usage. Kept outside OUT: the preview server serves OUT.
 const DATA = path.resolve(process.env.CONJURE_DATA || "conjure-data");
 const access = await new AccessStore({ file: path.join(DATA, "access.json"), ownerToken: ACCESS_TOKEN }).load();
+const guesses = new GuessGuard();
 const predictions = new PredictionService({
   dir: path.join(DATA, "predictions"),
   delayMs: MOCK_DELAY,
@@ -403,7 +405,14 @@ const server = http.createServer(async (req, res) => {
   if (ACCESS_TOKEN && (url.pathname === "/login" || url.pathname === "/auth/cid/start" || url.pathname === "/auth/cid/callback")) {
     return handleLogin(req, res, url);
   }
+  // Wrong tokens, product keys or session cookies count against the sender's address;
+  // too many and it's refused for a while, so credentials can't be guessed.
+  const ip = clientIp(req);
+  const presented = /^Bearer\s+\S/i.test(req.headers.authorization || "") || Boolean(cookies(req)[COOKIE]);
+  const wait = presented ? guesses.retryAfter(ip) : 0;
+  if (wait) return res.writeHead(429, { "content-type": "application/json", "retry-after": String(wait) }).end(JSON.stringify({ error: "too many wrong credentials; try again later" }));
   const who = principal(req);
+  if (presented && access.enabled) who ? guesses.succeed(ip) : guesses.fail(ip);
   const isApi = url.pathname.startsWith("/api/") || url.pathname.startsWith("/v1/");
   if (!who) {
     if (req.method === "GET" && !isApi) return res.writeHead(303, { location: "/login" }).end();

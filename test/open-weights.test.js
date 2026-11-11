@@ -123,3 +123,67 @@ test("CONJURE_OPEN_WEIGHTS_REDACT=off sends the prompt unmodified", async () => 
   delete process.env.CONJURE_OPEN_WEIGHTS_RETRIES;
   delete process.env.CONJURE_OPEN_WEIGHTS_REDACT;
 });
+
+/** Runs fn with these environment variables set, restoring the old values afterwards. */
+async function withEnv(vars, fn) {
+  const old = {};
+  for (const k of Object.keys(vars)) {
+    old[k] = process.env[k];
+    if (vars[k] === undefined) delete process.env[k];
+    else process.env[k] = vars[k];
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const k of Object.keys(vars)) {
+      if (old[k] === undefined) delete process.env[k];
+      else process.env[k] = old[k];
+    }
+  }
+}
+
+const GATEWAY = {
+  CONJURE_OPEN_WEIGHTS_URL: undefined,
+  CONJURE_OPEN_WEIGHTS_MODEL: undefined,
+  CONJURE_OPEN_WEIGHTS_KEY: undefined,
+  CONJURE_LLM_URL: "https://gw.example/v1",
+  CONJURE_LLM_KEY: "gw-key",
+  CONJURE_LLM_MODEL: "@cf/qwen/qwen3-30b-a3b-fp8",
+  CONJURE_LLM_ACCESS_ID: "access-id",
+  CONJURE_LLM_ACCESS_SECRET: "access-secret",
+  CONJURE_LLM_REASONING: "none",
+};
+
+test("with no open-weight server of its own, the forge loop uses the conjure-llm gateway", async () => {
+  await withEnv(GATEWAY, async () => {
+    const { seen, fetchImpl } = fakeServer(() => ({ choices: [{ message: { content: "ok" } }] }));
+    const p = new OpenWeightsProvider({ fetchImpl });
+    assert.equal(p.viaGateway, true);
+    await p.turn({ system: "s", messages: [{ role: "user", content: "go" }] });
+    assert.equal(seen[0].url, "https://gw.example/v1/chat/completions");
+    assert.equal(seen[0].headers.authorization, "Bearer gw-key");
+    assert.equal(seen[0].headers["cf-access-client-id"], "access-id");
+    assert.equal(seen[0].headers["cf-access-client-secret"], "access-secret");
+    assert.equal(seen[0].body.model, "@cf/qwen/qwen3-30b-a3b-fp8");
+    assert.equal(seen[0].body.reasoning_effort, "none");
+  });
+});
+
+test("an explicit open-weight server wins over the gateway and gets none of its credentials", async () => {
+  await withEnv({ ...GATEWAY, CONJURE_OPEN_WEIGHTS_URL: "http://own/v1" }, async () => {
+    const { seen, fetchImpl } = fakeServer(() => ({ choices: [{ message: { content: "ok" } }] }));
+    const p = new OpenWeightsProvider({ fetchImpl });
+    assert.equal(p.viaGateway, false);
+    await p.turn({ system: "s", messages: [{ role: "user", content: "go" }] });
+    assert.equal(seen[0].url, "http://own/v1/chat/completions");
+    assert.equal(seen[0].headers.authorization, undefined);
+    assert.equal(seen[0].headers["cf-access-client-id"], undefined);
+    assert.equal("reasoning_effort" in seen[0].body, false);
+  });
+});
+
+test("the gateway alone is enough to pick open weights over the mock", async () => {
+  const { openWeightsConfigured } = await import("../src/config.js");
+  await withEnv({ ...GATEWAY }, async () => assert.equal(openWeightsConfigured(), true));
+  await withEnv({ ...GATEWAY, CONJURE_LLM_URL: undefined }, async () => assert.equal(openWeightsConfigured(), false));
+});
