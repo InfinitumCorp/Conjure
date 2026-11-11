@@ -56,3 +56,20 @@ test("tool calls round-trip in both directions", async () => {
   assert.deepEqual(second.content, [{ type: "text", text: "Done." }]);
   assert.deepEqual(second.usage, { input_tokens: 9, output_tokens: 2 });
 });
+
+test("a used-up free allowance surfaces the gateway's message", async () => {
+  const fetchImpl = async () =>
+    new Response(JSON.stringify({ error: { type: "free_allowance_used", message: "Conjure's free daily model allowance is used up. It resets at 00:00 UTC." } }), { status: 429 });
+  const cfg = { baseUrl: "http://m/v1", model: "m", apiKey: "k", fetchImpl };
+  await assert.rejects(openaiComplete(cfg)("s", "u"), (e) => e.status === 429 && /free daily model allowance/.test(e.message));
+  await assert.rejects(openaiAsAnthropicFetch(cfg)("x", { body: JSON.stringify({ system: "s", messages: [{ role: "user", content: "go" }] }) }), /resets at 00:00 UTC/);
+});
+
+test("a JSON step with broken syntax is asked again and the fixed reply is returned", async () => {
+  const replies = ['{"personas": [{"name": "A"} {"name": "B"}]}', '{"personas": [{"name": "A"}, {"name": "B"}]}'];
+  const { seen, fetchImpl } = fakeServer(() => ({ choices: [{ message: { content: replies.shift() } }] }));
+  const out = await openaiComplete({ baseUrl: "http://m/v1", model: "m", apiKey: "", fetchImpl })("Reply in JSON.", "go");
+  assert.deepEqual(JSON.parse(out).personas.length, 2);
+  assert.equal(seen.length, 2);
+  assert.match(seen[1].body.messages.at(-1).content, /not valid JSON/);
+});
