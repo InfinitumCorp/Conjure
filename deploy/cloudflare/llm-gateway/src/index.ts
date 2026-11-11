@@ -15,9 +15,14 @@ interface Env {
   DEFAULT_MODEL: string;
   /** Neurons per UTC day the gateway may spend. Workers AI gives 10,000 free; keep a margin. */
   DAILY_NEURONS: string;
+  /** Optional free fallback providers (see providers.js); each is used only when its key is set. */
+  GROQ_API_KEY?: string;
+  NVIDIA_API_KEY?: string;
+  OPENROUTER_API_KEY?: string;
 }
 
 import { budgetedAI, FreeAllowanceUsed } from "./ai-budget.js";
+import { configured, fallback } from "./providers.js";
 
 const day = () => new Date().toISOString().slice(0, 10);
 
@@ -89,7 +94,10 @@ export default {
     if (url.pathname !== "/v1/chat/completions" && url.pathname !== "/v1/usage") return json({ error: { message: "Not found" } }, 404);
     const auth = request.headers.get("authorization") ?? "";
     if (!(await sameKey(auth.replace(/^Bearer\s+/i, ""), env.GATEWAY_KEY ?? ""))) return json({ error: { message: "Unauthorized" } }, 401);
-    if (url.pathname === "/v1/usage") return json(await budget().usage(limit));
+    const backups = configured(env as unknown as Record<string, unknown>);
+    if (url.pathname === "/v1/usage") {
+      return json({ ...(await budget().usage(limit)), fallbacks: backups.map((p) => ({ name: p.name, model: p.model })) });
+    }
     if (request.method !== "POST") return json({ error: { message: "Use POST" } }, 405);
 
     let body: any;
@@ -113,8 +121,28 @@ export default {
     // Every call goes through the account-wide ledger (shared with the other Workers that use Workers AI).
     const ai = budgetedAI(env.AI, ctx.exports.Budget, { limit, waitUntil: (p) => ctx.waitUntil(p) });
     try {
-      return json(toOpenAI(await ai.run(model, input), model));
+      return json(toOpenAI(await ai.run(model, input), model), 200, { "x-conjure-provider": "workers-ai" });
     } catch (err) {
+      // Workers AI is used up or failing: hand the call to the next free provider, if any are set up.
+      if (backups.length) {
+        try {
+          const out = await fallback(backups, {
+            messages: body.messages,
+            max_tokens: maxTokens,
+            tools: Array.isArray(body.tools) ? body.tools : undefined,
+            temperature: typeof body.temperature === "number" ? body.temperature : undefined,
+            reasoning_effort: typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined,
+          });
+          return json({ ...out.body, model: out.model }, 200, { "x-conjure-provider": out.provider });
+        } catch (fbErr) {
+          const status = (fbErr as { status?: number }).status ?? 502;
+          const message =
+            err instanceof FreeAllowanceUsed
+              ? "Conjure's free daily model allowance is used up on every provider. It resets at 00:00 UTC."
+              : (fbErr as Error).message;
+          return json({ error: { type: status === 429 ? "free_allowance_used" : "model_error", message } }, status, status === 429 ? { "retry-after": String(untilMidnightUtc()) } : {});
+        }
+      }
       if (err instanceof FreeAllowanceUsed) {
         return json(
           { error: { type: "free_allowance_used", message: "Conjure's free daily model allowance is used up. It resets at 00:00 UTC." } },
