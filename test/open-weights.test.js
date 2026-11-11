@@ -87,3 +87,39 @@ test("a bearer header is sent only when a key is given", async () => {
   await noKey.p.turn({ system: "s", messages: [{ role: "user", content: "go" }] });
   assert.equal(noKey.seen[0].headers.authorization, undefined);
 });
+
+test("a dead first server fails over to the second, and the prompt is redacted first", async () => {
+  process.env.CONJURE_OPEN_WEIGHTS_RETRIES = "0";
+  const key = "ghp_" + "A".repeat(36);
+  const seen = [];
+  const { p } = make(
+    { baseUrl: "http://a/v1,http://b/v1" },
+    (body) =>
+      body.messages.some((m) => /REDACTED/.test(JSON.stringify(m.content)))
+        ? { choices: [{ message: { content: "ok" } }] }
+        : { choices: [{ message: { content: "x" } }] },
+  );
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, body: init.body });
+    return url.startsWith("http://a") ? new Response("{}", { status: 500 }) : Response.json({ choices: [{ message: { content: "ok" } }] });
+  };
+  p.fetchImpl = fetchImpl;
+  const out = await p.turn({ system: "s", messages: [{ role: "user", content: `deploy with ${key}` }] });
+  assert.deepEqual(seen.map((s) => s.url), ["http://a/v1/chat/completions", "http://b/v1/chat/completions"]);
+  assert.ok(seen.every((s) => !s.body.includes(key) && s.body.includes("REDACTED:github-token")));
+  assert.equal(out.content[0].text, "ok");
+  delete process.env.CONJURE_OPEN_WEIGHTS_RETRIES;
+});
+
+test("CONJURE_OPEN_WEIGHTS_REDACT=off sends the prompt unmodified", async () => {
+  process.env.CONJURE_OPEN_WEIGHTS_RETRIES = "0";
+  process.env.CONJURE_OPEN_WEIGHTS_REDACT = "off";
+  const key = "ghp_" + "A".repeat(36);
+  let sent = null;
+  const { p } = make({ baseUrl: "http://a/v1" }, () => ({ choices: [{ message: { content: "x" } }] }));
+  p.fetchImpl = async (url, init) => { sent = init.body; return Response.json({ choices: [{ message: { content: "x" } }] }); };
+  await p.turn({ system: "s", messages: [{ role: "user", content: `deploy with ${key}` }] });
+  assert.ok(sent.includes(key));
+  delete process.env.CONJURE_OPEN_WEIGHTS_RETRIES;
+  delete process.env.CONJURE_OPEN_WEIGHTS_REDACT;
+});

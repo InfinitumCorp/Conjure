@@ -148,6 +148,8 @@ export class MockProvider {
 
 // ---------------------------------------------------------------------------- Open weights
 
+import { parseUrls, poolFor, redactMessages } from "./resilience.js";
+
 /**
  * Keyless open-weight models for the forge loop: Ollama, llama.cpp, vLLM, LM
  * Studio or any other OpenAI-compatible /chat/completions server, run on
@@ -164,11 +166,40 @@ export class OpenWeightsProvider {
   /** @param {object} [o] */
   constructor({ baseUrl, model, apiKey, fetchImpl = fetch, timeoutMs = 600_000 } = {}) {
     this.name = "open-weights";
-    this.baseUrl = (baseUrl || process.env.CONJURE_OPEN_WEIGHTS_URL || "http://localhost:11434/v1").replace(/\/+$/, "");
+    // CONJURE_OPEN_WEIGHTS_URL (or the constructor's baseUrl) may list several
+    // interchangeable servers, comma-separated; requests fail over down the list.
+    this.urls = parseUrls(baseUrl || process.env.CONJURE_OPEN_WEIGHTS_URL, ["http://localhost:11434/v1"]);
+    this.baseUrl = this.urls[0];
     this.model = model || process.env.CONJURE_OPEN_WEIGHTS_MODEL || process.env.CONJURE_MODEL || OPEN_WEIGHTS_DEFAULT_MODEL;
     this.apiKey = apiKey ?? process.env.CONJURE_OPEN_WEIGHTS_KEY ?? "";
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
+  }
+
+  /**
+   * One call through the endpoint pool: retry with backoff, fail over between
+   * the listed servers, trip a circuit breaker on a dead one, and strip
+   * credentials from the prompt first (CONJURE_OPEN_WEIGHTS_REDACT=off disables).
+   * @param {string} path
+   * @param {RequestInit} init
+   */
+  fetch(path, init) {
+    const intEnv = (name, fallback) => {
+      const n = Number(process.env[name]);
+      return Number.isInteger(n) && n >= 0 ? n : fallback;
+    };
+    let body = init.body;
+    if (process.env.CONJURE_OPEN_WEIGHTS_REDACT !== "off" && typeof body === "string") {
+      try {
+        const parsed = JSON.parse(body);
+        if (Array.isArray(parsed.messages)) {
+          const { messages, count } = redactMessages(parsed.messages);
+          if (count) body = JSON.stringify({ ...parsed, messages });
+        }
+      } catch { /* not JSON: send as is */ }
+    }
+    const pool = poolFor(this.urls, { retries: intEnv("CONJURE_OPEN_WEIGHTS_RETRIES", 2), baseMs: intEnv("CONJURE_OPEN_WEIGHTS_RETRY_BASE_MS", 400) });
+    return pool.fetch(path, { ...init, body }, { fetchImpl: this.fetchImpl });
   }
 
   /**
@@ -185,7 +216,7 @@ export class OpenWeightsProvider {
       // (older llama.cpp) still answer; the plan is parsed and retried upstream.
       ...(jsonSchema ? { response_format: { type: "json_schema", json_schema: { name: "output", schema: jsonSchema } } } : {}),
     };
-    const res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+    const res = await this.fetch("/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}) },
       body: JSON.stringify(body),
