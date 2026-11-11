@@ -140,7 +140,18 @@ ${error ? `<p class="err" role="alert">${error}</p>` : ""}
 
 const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const isSecure = (req) => (PUBLIC_URL ? PUBLIC_URL.startsWith("https://") : req.headers["x-forwarded-proto"] === "https");
-const redirectUri = (req) => `${PUBLIC_URL || `${isSecure(req) ? "https" : "http"}://${req.headers.host}`}/auth/cid/callback`;
+// Other hostnames that forward to this server (Conjure Russia's global hostname, a Cloudflare Worker).
+// A request that arrived through one of them is sent back to it after sign-in, so the sign-in cookie
+// it set is there to read. Only listed names count: X-Forwarded-Host is otherwise ignored.
+const FRONT_HOSTS = new Set((process.env.CONJURE_FRONT_HOSTS || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean));
+export const publicHost = (req) => {
+  const fwd = String(req.headers["x-forwarded-host"] || "").trim().toLowerCase();
+  return fwd && FRONT_HOSTS.has(fwd) ? fwd : req.headers.host;
+};
+const redirectUri = (req) =>
+  publicHost(req) !== req.headers.host
+    ? `https://${publicHost(req)}/auth/cid/callback`
+    : `${PUBLIC_URL || `${isSecure(req) ? "https" : "http"}://${req.headers.host}`}/auth/cid/callback`;
 const loginPage = (res, status, error) => res.writeHead(status, { "content-type": "text/html; charset=utf-8" }).end(LOGIN_PAGE(error ? esc(error) : ""));
 
 /** GET /login, /auth/cid/start and /auth/cid/callback: sign in with Cumulus ID. */

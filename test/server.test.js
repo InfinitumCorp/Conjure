@@ -76,7 +76,7 @@ describe("server with sign-in (CONJURE_ACCESS_TOKEN set)", () => {
   let issuer;
   before(async () => {
     issuer = await fakeIssuer();
-    s = await startServer({ CONJURE_ACCESS_TOKEN: TOKEN, CID_ISSUER: issuer.url, CID_OWNERS: "cid_owner" });
+    s = await startServer({ CONJURE_ACCESS_TOKEN: TOKEN, CID_ISSUER: issuer.url, CID_OWNERS: "cid_owner", CONJURE_FRONT_HOSTS: "front.example" });
   });
   after(() => {
     s.stop();
@@ -113,6 +113,14 @@ describe("server with sign-in (CONJURE_ACCESS_TOKEN set)", () => {
     assert.equal(to.searchParams.get("code_challenge_method"), "S256");
     assert.equal(to.searchParams.get("redirect_uri"), `${s.base}/auth/cid/callback`);
     assert.equal(to.searchParams.get("prompt"), "create");
+  });
+
+  test("sign-in through a listed front hostname returns there; an unlisted one is ignored", async () => {
+    const via = (host) => fetch(`${s.base}/auth/cid/start`, { redirect: "manual", headers: { "x-forwarded-host": host } })
+      .then((r) => new URL(r.headers.get("location")).searchParams.get("redirect_uri"));
+    assert.equal(await via("front.example"), "https://front.example/auth/cid/callback");
+    assert.equal(await via("FRONT.example"), "https://front.example/auth/cid/callback");
+    assert.equal(await via("evil.example"), `${s.base}/auth/cid/callback`);
   });
 
   test("a Cumulus ID that is not on the staff list is refused", async () => {
