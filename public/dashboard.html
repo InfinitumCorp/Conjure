@@ -42,6 +42,20 @@
   textarea,input[type=text],input[type=email],input[type=number],select { width:100%; padding:14px; border:1px solid var(--ink); border-radius:0; background:var(--paper); }
   textarea { min-height:96px; resize:vertical; font-size:18px; letter-spacing:-.01em; }
   textarea.small { min-height:72px; font-size:15px; }
+  /* Conjure Search */
+  .search-bar { display:flex; gap:12px; flex-wrap:wrap; align-items:stretch; }
+  .search-bar input[type=search] { flex:1 1 320px; min-width:0; font:inherit; font-size:18px; padding:14px 16px; border:1px solid var(--line); border-radius:0; background:var(--paper); color:var(--ink); }
+  .search-bar input[type=search]:focus { border-color:var(--ink); outline:none; }
+  .answer { font-size:17px; line-height:1.6; max-width:44em; }
+  .answer p { margin:0 0 12px; } .answer ul { margin:0 0 12px; padding-left:20px; }
+  .cite { font-size:12px; vertical-align:super; line-height:0; text-decoration:none; color:var(--accent); padding:0 1px; }
+  .sources { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; margin:0; padding:0; list-style:none; }
+  .sources li { border:1px solid var(--line); padding:10px 12px; font-size:13px; min-width:0; }
+  .sources li.cited { border-color:var(--ink); }
+  .sources a { text-decoration:none; display:block; font-weight:500; overflow-wrap:anywhere; }
+  .sources .dom { color:var(--muted); font-size:12px; }
+  .steps { display:flex; gap:14px; flex-wrap:wrap; font-size:13px; color:var(--muted); margin:0 0 14px; padding:0; list-style:none; }
+  .steps .on { color:var(--ink); } .steps .ok::before { content:"✓ "; }
   textarea:focus,input:focus,select:focus { border-color:var(--accent); outline:none; }
   .grid2 { display:grid; grid-template-columns:3fr 2fr; gap:clamp(20px,3vw,48px); align-items:start; }
   .row { display:flex; gap:12px; align-items:end; flex-wrap:wrap; }
@@ -120,11 +134,23 @@
           <label class="label">Agents<input type="number" id="agents" min="4" max="60" value="16"></label>
           <label class="label">Rounds<input type="number" id="rounds" min="1" max="8" value="3"></label>
           <label class="check"><input type="checkbox" id="mock"> Offline (mock)</label>
+          <label class="check" id="researchWrap" hidden><input type="checkbox" id="research" checked> Research the web first</label>
           <button class="btn-primary" id="run">Run forecast</button>
         </div>
       </form>
       <div class="out" id="tryOut" aria-live="polite"><p class="empty">The forecast appears here, round by round.</p></div>
     </div>
+  </section>
+
+  <section class="block" id="search" aria-labelledby="search-title">
+    <h2 id="search-title">Search</h2>
+    <p class="lede">Answers from the live web with sources. Conjure plans the searches, reads the pages and cites every claim. Search runs on Yandex in Russia, like the models. Products call it with <code>POST /v1/search</code>.</p>
+    <form id="searchForm" class="search-bar" role="search">
+      <input type="search" id="q" required minlength="3" maxlength="1000" placeholder="Ask anything: what changed in the Bank of Russia's key rate this year?" aria-label="Search question">
+      <label class="check"><input type="checkbox" id="fresh"> Newest first</label>
+      <button class="btn-primary" id="ask">Search</button>
+    </form>
+    <div id="searchOut" aria-live="polite" style="margin-top:20px"></div>
   </section>
 
   <section class="block" id="forecasts" aria-labelledby="fc-title">
@@ -211,8 +237,10 @@ function render() {
   const admin = d.me.role === "admin";
   $("staff").hidden = $("staffLink").hidden = !admin;
   $("productForm").hidden = !admin;
+  $("researchWrap").hidden = !d.search;
   $("stats").innerHTML = [
     stat("Mode", d.live ? "Live" : "Offline mock"), stat("Model", d.live ? String(d.model).replace(/^@cf\/[^/]+\//, "") : "mock"),
+    stat("Web search", d.search ? "On (Yandex, Russia)" : "Off"),
     // The free Workers AI allowance shared by the account (resets 00:00 UTC); a forecast uses about 300.
     ...(d.allowance ? [stat("Free model allowance left today", `${Math.round(d.allowance.remaining).toLocaleString()} of ${d.allowance.limit.toLocaleString()} (≈${Math.floor(d.allowance.remaining / 300)} forecasts)`)] : []),
     // Free providers the gateway falls back to once the allowance runs out.
@@ -267,8 +295,86 @@ function forecastHtml(v) {
     ${trend}<p style="margin:0">${esc(r.forecast)}</p>
     ${r.drivers?.length ? `<div><div class="label">Drivers</div><ul class="plain">${r.drivers.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
     ${r.signals?.length ? `<div><div class="label">Signals to watch</div><ul class="plain">${r.signals.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+    ${v.sources?.length ? `<div><div class="label">Researched from</div><ul class="plain">${v.sources.map((s) => `<li><a href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener noreferrer">${esc(s.title || s.domain)}</a> <span class="label">${esc(s.domain)}</span></li>`).join("")}</ul></div>` : ""}
     <p class="label" style="margin:0">A simulation is evidence, not proof.</p>`;
 }
+
+/* ---------- Conjure Search ---------- */
+const safeUrl = (u) => (/^https?:\/\//i.test(String(u)) ? String(u) : "#");
+/** The answer as HTML: escaped text, paragraphs and bullets, [n] turned into links to source n. */
+function answerHtml(text, sources) {
+  const byN = new Map((sources || []).map((s) => [s.n, s]));
+  const cite = (line) => esc(line).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\[(\d+)\]/g, (m, n) => {
+    const s = byN.get(Number(n));
+    return s ? `<a class="cite" href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener noreferrer" title="${esc(s.title)}">[${n}]</a>` : "";
+  });
+  const out = [];
+  let list = [];
+  const flush = () => { if (list.length) { out.push(`<ul>${list.map((l) => `<li>${cite(l)}</li>`).join("")}</ul>`); list = []; } };
+  for (const raw of String(text || "").split(/\n+/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const bullet = /^([-*•]|\d+[.)])\s+(.*)$/.exec(line);
+    if (bullet) list.push(bullet[2]);
+    else { flush(); out.push(`<p>${cite(line.replace(/^#+\s*/, ""))}</p>`); }
+  }
+  flush();
+  return out.join("");
+}
+function searchHtml(st) {
+  const steps = [["plan", "Planning"], ["search", "Searching"], ["read", "Reading"], ["answer", "Answering"]];
+  const at = steps.findIndex(([k]) => k === st.step);
+  const stepRow = st.answer ? "" : `<ul class="steps">${steps.map(([k, label], i) => `<li class="${i < at ? "ok" : i === at ? "on" : ""}">${label}</li>`).join("")}</ul>`;
+  const queries = st.queries?.length ? `<p class="label" style="margin:0 0 12px">Searched: ${st.queries.map((q) => `“${esc(q)}”`).join(", ")}${st.cached ? " · from cache" : ""}</p>` : "";
+  const answer = st.answer ? `<div class="answer">${answerHtml(st.answer, st.sources)}</div>` : "";
+  const read = new Set(st.read || []);
+  const sources = st.sources?.length ? `<div class="label" style="margin:16px 0 8px">Sources</div><ol class="sources">${st.sources.map((s) =>
+    `<li class="${s.cited ? "cited" : ""}"><span class="dom">[${s.n}] ${esc(s.domain)}${s.read || read.has(s.n) ? " · read" : ""}</span><a href="${esc(safeUrl(s.url))}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a></li>`).join("")}</ol>` : "";
+  const err = st.error ? `<p class="err">${esc(st.error)}</p>` : "";
+  return stepRow + queries + err + answer + sources;
+}
+let searchAbort = null;
+$("searchForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const query = $("q").value.trim();
+  if (query.length < 3) return;
+  searchAbort?.abort();
+  searchAbort = new AbortController();
+  const st = { step: "plan" };
+  const show = () => { $("searchOut").innerHTML = searchHtml(st); };
+  $("ask").disabled = true;
+  show();
+  try {
+    const res = await fetch("/v1/search?stream=1", { method: "POST", headers: { "content-type": "application/json", accept: "text/event-stream" }, body: JSON.stringify({ query, fresh: $("fresh").checked, user: data?.me.name }), signal: searchAbort.signal });
+    if (res.status === 401) { location.href = "/login"; return; }
+    if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.error || `HTTP ${res.status}`); }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const line = chunk.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.type === "status") st.step = ev.step;
+        else if (ev.type === "queries") st.queries = ev.queries;
+        else if (ev.type === "sources") st.sources = ev.sources;
+        else if (ev.type === "read") st.read = ev.read;
+        else if (ev.type === "answer") Object.assign(st, { answer: ev.answer, sources: ev.sources, queries: ev.queries, cached: ev.cached });
+        else if (ev.type === "error") st.error = ev.message;
+        show();
+      }
+    }
+  } catch (err) {
+    if (err.name !== "AbortError") { st.error = err.message; show(); }
+  } finally { $("ask").disabled = false; }
+});
 
 // --- Try @conjure: parse the mention like a product does, then follow the run live.
 function parseMention(text) {
@@ -286,7 +392,7 @@ $("tryForm").addEventListener("submit", async (e) => {
   if (!m || !m.question) { $("tryOut").innerHTML = `<p class="err">Write @conjure and a question, e.g. “@conjure will we hit plan this quarter?”</p>`; return; }
   $("run").disabled = true;
   try {
-    const started = await api("/v1/predictions", { method: "POST", body: JSON.stringify({ question: m.question, context: [m.context, $("ctx").value.trim()].filter(Boolean).join("\n\n"), agents: +$("agents").value, rounds: +$("rounds").value, mock: $("mock").checked, source: "dashboard", user: data?.me.name }) });
+    const started = await api("/v1/predictions", { method: "POST", body: JSON.stringify({ question: m.question, context: [m.context, $("ctx").value.trim()].filter(Boolean).join("\n\n"), agents: +$("agents").value, rounds: +$("rounds").value, mock: $("mock").checked, research: !$("researchWrap").hidden && $("research").checked, source: "dashboard", user: data?.me.name }) });
     stream?.close();
     stream = new EventSource(`/v1/predictions/${encodeURIComponent(started.id)}/events`);
     stream.onmessage = (ev) => {

@@ -12,7 +12,7 @@ import { openaiComplete, openaiAsAnthropicFetch } from "./openai.js";
 const MAX_QUESTION = 500;
 const MAX_CONTEXT = 30000;
 
-function modelSetup({ mock, delayMs }) {
+export function modelSetup({ mock, delayMs } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY || "";
   const openUrl = (process.env.CONJURE_LLM_URL || "").replace(/\/+$/, "");
   const useMock = mock || process.env.CONJURE_MOCK === "1" || (!apiKey && !openUrl);
@@ -36,6 +36,8 @@ export function publicView(rec, { full = false } = {}) {
     round: sim?.round ?? 0, rounds: sim?.rounds ?? rec.rounds, agents: sim?.personas.length ?? rec.agents,
     poles: sim?.poles, stats: sim?.stats ?? [], report: sim?.report ? { ...sim.report, steps: undefined } : undefined,
     calls: sim?.calls ?? 0, maxCalls: sim?.maxCalls,
+    research: rec.research || undefined,
+    sources: rec.sources,
   };
   if (full && sim) {
     view.summary = sim.seedSummary;
@@ -47,13 +49,15 @@ export function publicView(rec, { full = false } = {}) {
 }
 
 export class PredictionService extends EventEmitter {
-  constructor({ dir, concurrency = Number(process.env.CONJURE_PREDICT_CONCURRENCY || 2), delayMs = 0, onFinish } = {}) {
+  constructor({ dir, concurrency = Number(process.env.CONJURE_PREDICT_CONCURRENCY || 2), delayMs = 0, onFinish, research } = {}) {
     super();
     this.setMaxListeners(200);
     this.dir = dir;
     this.concurrency = Math.max(1, concurrency);
     this.delayMs = delayMs;
     this.onFinish = onFinish;
+    // (question, { signal }) => research result; set when web search is available.
+    this.research = research;
     this.records = new Map();
     this.queue = [];
     this.running = 0;
@@ -93,7 +97,7 @@ export class PredictionService extends EventEmitter {
   }
 
   /** Validates input and queues a run. Throws ConjureError for bad input. */
-  async create({ product, user, source, question, context, agents, rounds, mock }) {
+  async create({ product, user, source, question, context, agents, rounds, mock, research }) {
     const q = typeof question === "string" ? question.trim() : "";
     if (!q) throw new ConjureError("Ask a question after @conjure");
     if (q.length > MAX_QUESTION) throw new ConjureError(`Keep the question under ${MAX_QUESTION} characters`);
@@ -104,7 +108,7 @@ export class PredictionService extends EventEmitter {
     const rec = {
       id: `pr_${crypto.randomBytes(9).toString("base64url")}`, product, user: typeof user === "string" ? user.slice(0, 120) : undefined,
       source: typeof source === "string" ? source.slice(0, 120) : undefined, question: q, context: (context ?? "").trim(),
-      agents: a, rounds: r, mock: Boolean(mock), status: "queued", createdAt: new Date().toISOString(),
+      agents: a, rounds: r, mock: Boolean(mock), research: Boolean(research) && !mock && Boolean(this.research), status: "queued", createdAt: new Date().toISOString(),
       estimate: estimateCalls(a, r).calls,
     };
     this.records.set(rec.id, rec);
@@ -160,6 +164,22 @@ export class PredictionService extends EventEmitter {
     };
     try {
       let seed = rec.context;
+      if (rec.research) {
+        // Ground the world in today's web: a cited brief from Conjure Search, ahead of any notes.
+        try {
+          const r = await this.research(rec.question, { signal: controller.signal });
+          rec.sources = r.sources.filter((s) => s.cited || s.read).map(({ n, url, title, domain }) => ({ n, url, title, domain }));
+          seed = `${r.brief}${seed ? `
+
+Notes from the product:
+${seed}` : ""}`;
+          this.emitUpdate(rec);
+        } catch (err) {
+          if (controller.signal.aborted) throw err;
+          rec.researchError = String(err?.message || err).slice(0, 200);
+        }
+        checkCancel();
+      }
       if (seed.length < 40) {
         // A bare "@conjure question" has no background: draft a neutral brief to seed the world.
         seed = await setup.complete(

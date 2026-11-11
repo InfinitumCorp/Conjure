@@ -12,6 +12,7 @@ import { zipDeliverable } from "./zip.js";
 import { cidConfig, startSignIn, finishSignIn, clearPending } from "./cid.js";
 import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
 import { PredictionService, publicView } from "./predict/service.js";
+import { SearchService } from "./search/index.js";
 import { modelUsage } from "./predict/openai.js";
 import { GuessGuard, clientIp } from "./guard.js";
 import { ConjureError as PredictError } from "./predict/vendor/conjure.ts";
@@ -36,8 +37,11 @@ const MOCK_DELAY = Number(process.env.CONJURE_MOCK_DELAY || 0);
 const DATA = path.resolve(process.env.CONJURE_DATA || "conjure-data");
 const access = await new AccessStore({ file: path.join(DATA, "access.json"), ownerToken: ACCESS_TOKEN }).load();
 const guesses = new GuessGuard();
+// Conjure Search: answers from the live web with citations (Yandex Search API, in Russia).
+const search = new SearchService();
 const predictions = new PredictionService({
   dir: path.join(DATA, "predictions"),
+  research: search.configured ? (question, o) => search.brief(question, o) : undefined,
   delayMs: MOCK_DELAY,
   onFinish: (rec) => access.logUsage({ kind: "prediction", id: rec.id, product: rec.product, user: rec.user, status: rec.status, ms: rec.ms, calls: rec.sim?.calls ?? 0, mode: rec.mode }),
 });
@@ -285,6 +289,65 @@ function streamPrediction(req, res, rec, full) {
   req.on("close", finish);
 }
 
+// Searches per product per day (UTC), kept in memory: a restart resets the count.
+const SEARCH_DAILY_LIMIT = Math.max(1, Number(process.env.CONJURE_SEARCH_DAILY_LIMIT) || 1000);
+const searchCounts = new Map();
+function countSearch(product) {
+  const day = new Date().toISOString().slice(0, 10);
+  for (const k of searchCounts.keys()) if (!k.startsWith(day)) searchCounts.delete(k);
+  const key = `${day}:${product}`;
+  const n = (searchCounts.get(key) ?? 0) + 1;
+  searchCounts.set(key, n);
+  return n;
+}
+
+/** POST /v1/search {query, fresh?}: a cited answer from the web. Streams progress with ?stream=1 or Accept: text/event-stream. */
+async function handleSearch(req, res, url, who, product) {
+  let body;
+  try {
+    body = await readJson(req, 16 * 1024);
+  } catch {
+    return json(res, 400, { error: "invalid JSON" });
+  }
+  const query = typeof body?.query === "string" ? body.query.trim() : "";
+  if (query.length < 3 || query.length > 1000) return json(res, 400, { error: "query must be 3 to 1000 characters" });
+  if (!search.configured) return json(res, 503, { error: "Web search isn't switched on for this server." });
+  if (who.kind === "product" && countSearch(product) > SEARCH_DAILY_LIMIT) return json(res, 429, { error: `daily limit of ${SEARCH_DAILY_LIMIT} searches reached for ${product}` });
+  if (who.kind === "product") access.touchProduct(who.record);
+  const started = Date.now();
+  const user = typeof body.user === "string" ? body.user.slice(0, 120) : undefined;
+  const log = (status) => access.logUsage({ kind: "search", product, user, status, ms: Date.now() - started });
+  const controller = new AbortController();
+  const fresh = Boolean(body.fresh);
+  const streaming = url.searchParams.get("stream") === "1" || /text\/event-stream/.test(req.headers.accept || "");
+  if (!streaming) {
+    res.on("close", () => !res.writableEnded && controller.abort());
+    try {
+      const r = await search.ask(query, { signal: controller.signal, fresh });
+      log("done");
+      return json(res, 200, r);
+    } catch (err) {
+      log("failed");
+      return json(res, err.status || 502, { error: err.message });
+    }
+  }
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+  const send = (v) => !res.writableEnded && res.write(`data: ${JSON.stringify(v)}\n\n`);
+  const ping = setInterval(() => !res.writableEnded && res.write(": ping\n\n"), 15000);
+  res.on("close", () => controller.abort());
+  try {
+    await search.ask(query, { onEvent: send, signal: controller.signal, fresh });
+    log("done");
+  } catch (err) {
+    log("failed");
+    send({ type: "error", message: controller.signal.aborted ? "cancelled" : err.message });
+  } finally {
+    clearInterval(ping);
+    send({ type: "end" });
+    res.end();
+  }
+}
+
 async function handleV1(req, res, url, who) {
   // Staff calling /v1 directly (from the dashboard console or curl) act as the "dashboard" product.
   const product = who.kind === "product" ? who.slug : "dashboard";
@@ -294,8 +357,9 @@ async function handleV1(req, res, url, who) {
   if (req.method === "GET" && url.pathname === "/v1/health") {
     // Live on open-weight models (CONJURE_LLM_URL) as well as on Claude, the same test as the dashboard's.
     const live = Boolean(process.env.CONJURE_LLM_URL || process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1";
-    return json(res, 200, { ok: true, product, live, ...predictions.stats() });
+    return json(res, 200, { ok: true, product, live, search: search.configured, ...predictions.stats() });
   }
+  if (req.method === "POST" && url.pathname === "/v1/search") return handleSearch(req, res, url, who, product);
   if (!m) return json(res, 404, { error: "not found" });
   const [, id, action] = m;
 
@@ -378,7 +442,7 @@ async function handleAdmin(req, res, url, who) {
         allowance: await modelUsage(),
         queue: predictions.stats(), builderBusy: Boolean(current),
         day: summarize(last24), week: summarize(all.filter((r) => Date.now() - Date.parse(r.createdAt) < 7 * DAY)),
-        products, known: KNOWN_PRODUCTS,
+        products, known: KNOWN_PRODUCTS, search: search.configured,
         staff: admin ? access.listStaff() : undefined,
         recent: all.slice(0, 50).map((r) => publicView(r)),
       });
