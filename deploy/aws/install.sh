@@ -74,12 +74,36 @@ umask 077
 } > /etc/conjure/env
 umask 022
 
-# --- Model: without an Anthropic key, run a free open-source model locally (Ollama) ---
-if [ -z "$API_KEY" ] || [ "$API_KEY" = "None" ] || [ "$API_KEY" = "unset" ]; then
-  LLM_MODEL="$(param /conjure/llm-model)"
-  if [ -z "$LLM_MODEL" ] || [ "$LLM_MODEL" = "None" ]; then LLM_MODEL=qwen2.5:1.5b; fi
-  log "installing the open-source model backend ($LLM_MODEL)"
-  CONJURE_LLM_MODEL="$LLM_MODEL" CONJURE_SKIP_RESTART=1 bash "$RELEASE/deploy/aws/install-ollama.sh"
+# --- Model: open-weight models on Cloudflare Workers AI through the conjure-llm gateway ---
+# /conjure/llm-url (String) and /conjure/llm-key (SecureString). Takes precedence over an Anthropic key.
+LLM_URL="$(param /conjure/llm-url)"
+LLM_KEY="$(param /conjure/llm-key)"
+LLM_MODEL="$(param /conjure/llm-model)"
+if [ -n "$LLM_URL" ] && [ "$LLM_URL" != "None" ]; then
+  log "model: open-weight via $LLM_URL"
+  umask 077
+  {
+    echo "CONJURE_LLM_URL=$LLM_URL"
+    if [ -n "$LLM_KEY" ] && [ "$LLM_KEY" != "None" ]; then echo "CONJURE_LLM_KEY=$LLM_KEY"; fi
+    # Cloudflare Access service token for the gateway (/conjure/llm-access-id, /conjure/llm-access-secret).
+    ACCESS_ID="$(param /conjure/llm-access-id)"; ACCESS_SECRET="$(param /conjure/llm-access-secret)"
+    if [ -n "$ACCESS_ID" ] && [ "$ACCESS_ID" != "None" ] && [ -n "$ACCESS_SECRET" ] && [ "$ACCESS_SECRET" != "None" ]; then
+      echo "CONJURE_LLM_ACCESS_ID=$ACCESS_ID"; echo "CONJURE_LLM_ACCESS_SECRET=$ACCESS_SECRET"
+    fi
+    if [ -z "$LLM_MODEL" ] || [ "$LLM_MODEL" = "None" ]; then LLM_MODEL="@cf/qwen/qwen3-30b-a3b-fp8"; fi
+    echo "CONJURE_LLM_MODEL=$LLM_MODEL"
+    echo "CONJURE_LLM_REASONING=none"
+  } >> /etc/conjure/env
+  umask 022
+fi
+
+# Ollama was tried here and replaced by the cloud gateway; remove it if an earlier deploy left it.
+if command -v ollama >/dev/null 2>&1 || [ -f /etc/systemd/system/ollama.service ]; then
+  log "removing the earlier local Ollama install"
+  systemctl disable --now ollama >/dev/null 2>&1 || true
+  rm -rf /etc/systemd/system/ollama.service /etc/systemd/system/ollama.service.d /usr/local/bin/ollama /usr/local/lib/ollama /usr/share/ollama
+  id ollama >/dev/null 2>&1 && userdel ollama || true
+  getent group ollama >/dev/null 2>&1 && groupdel ollama || true
 fi
 
 # --- Services ---

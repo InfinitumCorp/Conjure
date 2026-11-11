@@ -6,6 +6,11 @@
 const TIMEOUT_MS = Number(process.env.CONJURE_LLM_TIMEOUT_MS || 600_000);
 // "none" turns thinking off on reasoning models (qwen3, gpt-oss) so the token budget goes to the answer.
 const REASONING = process.env.CONJURE_LLM_REASONING || "";
+// A Cloudflare Access service token, when the model gateway sits behind Access.
+const ACCESS =
+  process.env.CONJURE_LLM_ACCESS_ID && process.env.CONJURE_LLM_ACCESS_SECRET
+    ? { "cf-access-client-id": process.env.CONJURE_LLM_ACCESS_ID, "cf-access-client-secret": process.env.CONJURE_LLM_ACCESS_SECRET }
+    : {};
 
 /** Some servers inline the model's thinking; the engine only wants the answer. */
 const answer = (text) => String(text ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
@@ -13,7 +18,7 @@ const answer = (text) => String(text ?? "").replace(/<think>[\s\S]*?<\/think>/g,
 async function chat({ baseUrl, model, apiKey, fetchImpl = fetch }, body) {
   return fetchImpl(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
+    headers: { "content-type": "application/json", ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}), ...ACCESS },
     body: JSON.stringify({ model, ...(REASONING ? { reasoning_effort: REASONING } : {}), ...body }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
