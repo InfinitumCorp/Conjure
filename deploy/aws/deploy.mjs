@@ -240,5 +240,5 @@ for (let i = 0; i < 90 && !ok; i++) {
 if (!ok) die(`${out.AppUrl} is not answering yet. First boot installs Node and gets a certificate; check again with --status in a few minutes.`);
 console.log(`\n✓ Conjure is live: ${out.AppUrl}`);
 console.log(`  previews: ${out.PreviewUrl}`);
-console.log(`  sign in with the token in .conjure-access-token`);
+console.log(`  sign in with Cumulus ID (set CID_OWNERS and CONJURE_PUBLIC_URL); scripts can use the token in .conjure-access-token`);
 console.log(`  Android app: adb shell am start -n com.conjure.app/.MainActivity --es url ${out.AppUrl}/`);

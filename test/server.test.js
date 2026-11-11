@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import http from "node:http";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let nextPort = 47000 + Math.floor(Math.random() * 1000) * 2;
@@ -42,13 +43,45 @@ async function readStream(res) {
   return text.split("\n\n").filter((c) => c.startsWith("data: ")).map((c) => JSON.parse(c.slice(6)));
 }
 
+/** A stand-in Cumulus ID issuer: the code names the person who signed in. */
+async function fakeIssuer() {
+  const people = { owner: { cid: "cid_owner", username: "william" }, stranger: { cid: "cid_stranger", username: "nobody" } };
+  const seen = [];
+  const server = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const c of req) body += c;
+    if (req.method !== "POST" || req.url !== "/api/id/token") return res.writeHead(404).end();
+    const b = JSON.parse(body);
+    seen.push(b);
+    const profile = people[b.code];
+    if (!profile || b.client_id !== "conjure" || !b.code_verifier) return res.writeHead(400, { "content-type": "application/json" }).end('{"error":"bad code"}');
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ access_token: "t", profile }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { url: `http://127.0.0.1:${server.address().port}`, seen, close: () => server.close() };
+}
+
+/** Starts sign-in, then returns from the issuer with `code`. Resolves to the callback response. */
+async function signIn(base, code, headers = {}) {
+  const start = await fetch(`${base}/auth/cid/start`, { redirect: "manual", headers });
+  assert.equal(start.status, 302);
+  const state = new URL(start.headers.get("location")).searchParams.get("state");
+  const pending = start.headers.get("set-cookie").split(";")[0];
+  return fetch(`${base}/auth/cid/callback?code=${code}&state=${state}`, { redirect: "manual", headers: { ...headers, cookie: pending } });
+}
+
 describe("server with sign-in (CONJURE_ACCESS_TOKEN set)", () => {
   let s;
   let cookie;
+  let issuer;
   before(async () => {
-    s = await startServer({ CONJURE_ACCESS_TOKEN: TOKEN });
+    issuer = await fakeIssuer();
+    s = await startServer({ CONJURE_ACCESS_TOKEN: TOKEN, CID_ISSUER: issuer.url, CID_OWNERS: "cid_owner" });
   });
-  after(() => s.stop());
+  after(() => {
+    s.stop();
+    issuer.close();
+  });
 
   test("health check and icons need no sign-in", async () => {
     assert.equal((await fetch(`${s.base}/healthz`)).status, 200);
@@ -64,23 +97,41 @@ describe("server with sign-in (CONJURE_ACCESS_TOKEN set)", () => {
     assert.equal((await fetch(`${s.base}/api/conjure`, { method: "POST", headers: json, body: "{}" })).status, 401);
   });
 
-  test("a wrong token is refused", async () => {
-    const r = await fetch(`${s.base}/login`, { method: "POST", body: new URLSearchParams({ token: "nope" }), redirect: "manual" });
-    assert.equal(r.status, 401);
-    assert.equal(r.headers.get("set-cookie"), null);
+  test("the sign-in page offers Cumulus ID and Create, and no token field", async () => {
+    const html = await (await fetch(`${s.base}/login`)).text();
+    assert.match(html, /Sign in with Cumulus ID/);
+    assert.match(html, /Create a Cumulus ID/);
+    assert.doesNotMatch(html, /type="password"/);
+    assert.equal((await fetch(`${s.base}/login`, { method: "POST", body: new URLSearchParams({ token: TOKEN }), redirect: "manual" })).status, 405);
   });
 
-  test("a login POST from another site is refused even with the right token", async () => {
-    const r = await fetch(`${s.base}/login`, { method: "POST", headers: { origin: "https://evil.example" }, body: new URLSearchParams({ token: TOKEN }), redirect: "manual" });
+  test("start sends people to the issuer with PKCE, and Create asks for the create screen", async () => {
+    const r = await fetch(`${s.base}/auth/cid/start?create=1`, { redirect: "manual" });
+    const to = new URL(r.headers.get("location"));
+    assert.equal(to.origin + to.pathname, `${issuer.url}/api/id/authorize`);
+    assert.equal(to.searchParams.get("client_id"), "conjure");
+    assert.equal(to.searchParams.get("code_challenge_method"), "S256");
+    assert.equal(to.searchParams.get("redirect_uri"), `${s.base}/auth/cid/callback`);
+    assert.equal(to.searchParams.get("prompt"), "create");
+  });
+
+  test("a Cumulus ID that is not on the staff list is refused", async () => {
+    const r = await signIn(s.base, "stranger");
     assert.equal(r.status, 403);
+    assert.doesNotMatch(r.headers.get("set-cookie") || "", /conjure_session=[^;]/);
   });
 
-  test("the right token sets an HttpOnly, SameSite=Strict session cookie", async () => {
-    const r = await fetch(`${s.base}/login`, { method: "POST", headers: { "x-forwarded-proto": "https" }, body: new URLSearchParams({ token: TOKEN }), redirect: "manual" });
+  test("a forged state is refused", async () => {
+    const r = await fetch(`${s.base}/auth/cid/callback?code=owner&state=forged`, { redirect: "manual" });
+    assert.equal(r.status, 401);
+  });
+
+  test("the owner's Cumulus ID sets an HttpOnly, SameSite=Lax session cookie", async () => {
+    const r = await signIn(s.base, "owner", { "x-forwarded-proto": "https" });
     assert.equal(r.status, 303);
-    const set = r.headers.get("set-cookie");
+    const set = r.headers.getSetCookie().find((c) => c.startsWith("conjure_session="));
     assert.match(set, /HttpOnly/);
-    assert.match(set, /SameSite=Strict/);
+    assert.match(set, /SameSite=Lax/);
     assert.match(set, /Secure/);
     assert.doesNotMatch(set, new RegExp(TOKEN), "the cookie must not contain the raw token");
     cookie = set.split(";")[0];

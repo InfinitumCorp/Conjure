@@ -1,6 +1,7 @@
 // @conjure: the mention parser, the prediction API for products, staff accounts and the dashboard API.
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -56,11 +57,22 @@ describe("@conjure mentions", () => {
 });
 
 describe("prediction service with staff sign-in", () => {
-  let s, productKey, staffToken;
+  let s, productKey, staffToken, issuer;
   before(async () => {
-    s = await startServer({ CONJURE_ACCESS_TOKEN: OWNER, CONJURE_MOCK_DELAY: "5" });
+    // Stand-in Cumulus ID issuer: the code is the cid of the person who signed in.
+    issuer = http.createServer(async (req, res) => {
+      let body = "";
+      for await (const c of req) body += c;
+      const { code } = JSON.parse(body || "{}");
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ access_token: "t", profile: { cid: code, username: code } }));
+    });
+    await new Promise((r) => issuer.listen(0, "127.0.0.1", r));
+    s = await startServer({ CONJURE_ACCESS_TOKEN: OWNER, CONJURE_MOCK_DELAY: "5", CID_ISSUER: `http://127.0.0.1:${issuer.address().port}` });
   });
-  after(() => s.stop());
+  after(() => {
+    s.stop();
+    issuer.close();
+  });
 
   test("the dashboard needs a staff sign-in", async () => {
     assert.equal((await fetch(`${s.base}/`, { redirect: "manual" })).status, 303);
@@ -88,7 +100,7 @@ describe("prediction service with staff sign-in", () => {
     assert.equal((await fetch(`${s.base}/api/admin/overview`, { headers: auth(productKey) })).status, 403);
     assert.equal((await fetch(`${s.base}/api/history`, { headers: auth(productKey) })).status, 403);
     const login = await fetch(`${s.base}/login`, { method: "POST", body: new URLSearchParams({ token: productKey }), redirect: "manual" });
-    assert.equal(login.status, 401, "a product key can't sign in to the dashboard");
+    assert.notEqual(login.status, 303, "a product key can't sign in to the dashboard");
   });
 
   test("the client turns an @conjure message into a finished forecast", async () => {
@@ -132,11 +144,14 @@ describe("prediction service with staff sign-in", () => {
   });
 
   test("staff get their own tokens; staff can view but not change keys; revoking signs them out", async () => {
-    const add = await (await fetch(`${s.base}/api/admin/staff`, { method: "POST", headers: auth(OWNER), body: JSON.stringify({ name: "Ada", role: "staff" }) })).json();
+    const add = await (await fetch(`${s.base}/api/admin/staff`, { method: "POST", headers: auth(OWNER), body: JSON.stringify({ name: "Ada", role: "staff", cid: "cid_ada" }) })).json();
     staffToken = add.token;
-    const login = await fetch(`${s.base}/login`, { method: "POST", body: new URLSearchParams({ token: staffToken }), redirect: "manual" });
+    // Staff sign in with their Cumulus ID; the cjs_ token is for scripts.
+    const start = await fetch(`${s.base}/auth/cid/start`, { redirect: "manual" });
+    const state = new URL(start.headers.get("location")).searchParams.get("state");
+    const login = await fetch(`${s.base}/auth/cid/callback?code=cid_ada&state=${state}`, { redirect: "manual", headers: { cookie: start.headers.get("set-cookie").split(";")[0] } });
     assert.equal(login.status, 303);
-    const cookie = login.headers.get("set-cookie").split(";")[0];
+    const cookie = login.headers.getSetCookie().find((c) => c.startsWith("conjure_session=")).split(";")[0];
     assert.ok(!cookie.includes(staffToken));
     const ov = await (await fetch(`${s.base}/api/admin/overview`, { headers: { cookie } })).json();
     assert.equal(ov.me.name, "Ada");

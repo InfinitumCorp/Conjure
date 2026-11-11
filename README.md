@@ -9,7 +9,7 @@ Conjure is not a consumer product. It is the model that runs inside Infinitum pr
 - **Engine.** The prediction engine lives in Infinitum Nexus (`@infinitum/conjure`). `node scripts/sync-nexus.mjs` copies it into `src/predict/vendor/`, so this service runs exactly the code products import.
 - **API for products** (`/v1`, product key as `Authorization: Bearer cjp_<product>_…`): `POST /v1/predictions` {question, context, user, source, agents, rounds} → 202; `GET /v1/predictions/:id`; `GET /v1/predictions/:id/events` (live, server-sent events); `POST /v1/predictions/:id/interview`; `POST /v1/predictions/:id/cancel`; `GET /v1/health`. Each product sees only its own forecasts and has a daily limit.
 - **Client.** `client/conjure.mjs` (no dependencies; types in `conjure.d.mts`). Products call `handleMention(text)`; it returns null when there's no @conjure. Nexus products use the same contract from `@infinitum/conjure`.
-- **Staff dashboard** (`/`, private). Sign in with your own staff token. Status, a "Try @conjure" console with live rounds, every forecast across products, product keys (issue, rotate, revoke) and staff (admins add and revoke people). Tokens and keys are stored hashed and shown once. The builder studio moved to `/studio`.
+- **Staff dashboard** (`/`, private). Sign in with Cumulus ID ("Create a Cumulus ID" is on the same screen). The owner is whoever is in `CID_OWNERS`; admins add staff by their Cumulus ID email or CID. Status, a "Try @conjure" console with live rounds, every forecast across products, product keys (issue, rotate, revoke) and staff (admins add and revoke people). Tokens and keys are stored hashed and shown once. The builder studio moved to `/studio`.
 - **Offline.** Without `ANTHROPIC_API_KEY` forecasts run on a deterministic mock and are labelled "mock".
 
 Data (staff, keys, forecasts, `usage.jsonl`) is kept in `CONJURE_DATA` (default `./conjure-data`; `/var/lib/conjure-data` on AWS), never under the preview folder.
@@ -81,7 +81,7 @@ node deploy/aws/deploy.mjs --status    # URL and stack state
 node deploy/aws/deploy.mjs --destroy --yes
 ```
 
-- **Sign-in:** the first deploy generates an access token, stores it in SSM Parameter Store (`/conjure/access-token`) and saves a copy to `.conjure-access-token` (git-ignored). With `CONJURE_ACCESS_TOKEN` set, every page and API call needs it (cookie after `/login`, or `Authorization: Bearer`); cross-site and non-JSON POSTs are refused.
+- **Sign-in:** the first deploy generates an access token, stores it in SSM Parameter Store (`/conjure/access-token`) and saves a copy to `.conjure-access-token` (git-ignored). With `CONJURE_ACCESS_TOKEN` set, every page and API call needs a session: people get one by signing in with Cumulus ID at `/login` (set `CID_OWNERS`, and `CONJURE_PUBLIC_URL` so the redirect is `<url>/auth/cid/callback`; `CID_ISSUER` can point at a mirror that loads in Russia). Scripts may still send the token as `Authorization: Bearer`; cross-site and non-JSON POSTs are refused.
 - **Live mode:** if `.env` has `ANTHROPIC_API_KEY`, the deploy stores it as `/conjure/anthropic-api-key`; without it the server runs in offline mock mode.
 - **Previews:** the preview host serves only a deliverable's own files (never `conjure.json` or `transcript.jsonl`) and needs no sign-in, so anyone with a deliverable's exact URL can open it. Folder names carry a random suffix.
 - **Data:** deliverables live on the instance's disk (`/var/lib/conjure`) and are deleted with the stack.
