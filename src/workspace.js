@@ -20,7 +20,13 @@ export class Workspace {
     if (typeof relPath !== "string" || relPath.trim() === "") {
       throw new WorkspaceError("path must be a non-empty string");
     }
-    const target = path.resolve(this.root, relPath);
+    // Treat "\" as a separator on every OS, so "..\x" cannot escape on Linux,
+    // and reject drive-letter and rooted paths outright.
+    const norm = relPath.replace(/\\/g, "/");
+    if (/^[a-zA-Z]:/.test(norm) || norm.startsWith("/")) {
+      throw new WorkspaceError(`path escapes the workspace: ${relPath}`);
+    }
+    const target = path.resolve(this.root, norm);
     const rel = path.relative(this.root, target);
     if (rel === "" || rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) {
       throw new WorkspaceError(`path escapes the workspace: ${relPath}`);
