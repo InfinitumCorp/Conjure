@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
+        android:name=".ConjureApp"
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true"
@@ -22,5 +23,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- From the vendored androidx.startup / lifecycle-process manifests (no Gradle merge here):
+             starts ProcessLifecycleOwner, which Amplitude uses for app foreground/background. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="com.conjure.app.androidx-startup"
+            android:exported="false">
+            <meta-data
+                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+                android:value="androidx.startup" />
+        </provider>
     </application>
 </manifest>
