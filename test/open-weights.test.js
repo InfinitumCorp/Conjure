@@ -187,3 +187,13 @@ test("the gateway alone is enough to pick open weights over the mock", async () 
   await withEnv({ ...GATEWAY }, async () => assert.equal(openWeightsConfigured(), true));
   await withEnv({ ...GATEWAY, CONJURE_LLM_URL: undefined }, async () => assert.equal(openWeightsConfigured(), false));
 });
+
+test("a jsonSchema request also spells the schema out in the system prompt", async () => {
+  const schema = { type: "object", properties: { files: { type: "array" } }, required: ["files"] };
+  const { seen, p } = make({}, () => ({ choices: [{ message: { content: "{\"files\":[]}" } }] }));
+  await p.turn({ system: "plan it", messages: [{ role: "user", content: "go" }], jsonSchema: schema });
+  const sys = seen[0].body.messages[0];
+  assert.equal(sys.role, "system");
+  assert.ok(sys.content.startsWith("plan it\n\nReply with only one JSON object"));
+  assert.ok(sys.content.includes(JSON.stringify(schema)));
+});
