@@ -95,7 +95,7 @@ function cookies(req) {
   return out;
 }
 
-/** Staff (owner token, staff token or session cookie), a product (product key), or null. */
+/** The owner (owner token or session cookie), a product (product key), or null. */
 function principal(req) {
   const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || "")?.[1]?.trim();
   if (bearer) return access.staffByToken(bearer) || access.productByKey(bearer);
@@ -173,7 +173,7 @@ async function handleLogin(req, res, url) {
     who = await access.staffByCid(profile, CID.owners);
     if (!who) {
       res.setHeader("set-cookie", clearPending(secure));
-      return loginPage(res, 403, "This Cumulus ID is not on the Conjure staff list. Ask an admin to add you.");
+      return loginPage(res, 403, "This Cumulus ID is not a Conjure owner (CID_OWNERS).");
     }
   } catch (e) {
     res.setHeader("set-cookie", clearPending(secure));
@@ -446,7 +446,6 @@ async function handleAdmin(req, res, url, who) {
         queue: predictions.stats(), builderBusy: Boolean(current),
         day: summarize(last24), week: summarize(all.filter((r) => Date.now() - Date.parse(r.createdAt) < 7 * DAY)),
         products, known: KNOWN_PRODUCTS, search: search.configured,
-        staff: admin ? access.listStaff() : undefined,
         recent: all.slice(0, 50).map((r) => publicView(r)),
       });
     }
@@ -455,14 +454,11 @@ async function handleAdmin(req, res, url, who) {
       return rec ? json(res, 200, publicView(rec, { full: true })) : json(res, 404, { error: "no such prediction" });
     }
     if (write && p === "/api/admin/products") return json(res, 201, await access.addProduct(body, who));
-    if (write && p === "/api/admin/staff") return json(res, 201, await access.addStaff(body, who));
     let mm = /^\/api\/admin\/products\/([\w-]+)\/(rotate|revoke)$/.exec(p);
     if (write && mm) {
       if (mm[2] === "rotate") return json(res, 201, await access.rotateProduct(mm[1], who));
       return json(res, 200, { revoked: await access.revokeProduct(mm[1], who) });
     }
-    mm = /^\/api\/admin\/staff\/([\w-]+)\/revoke$/.exec(p);
-    if (write && mm) return json(res, 200, { revoked: await access.revokeStaff(mm[1], who) });
   } catch (err) {
     return json(res, 400, { error: err.message });
   }

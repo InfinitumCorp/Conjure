@@ -18,6 +18,19 @@ echo "platform:    $PLATFORM"
 
 rm -rf build && mkdir -p build/res build/classes build/dex
 
+# Amplitude Android SDK and its runtime dependencies, pinned by SHA-256 (see scripts/fetch-deps.sh).
+bash scripts/fetch-deps.sh
+DEPS=.deps
+SEP=":"; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) SEP=";";; esac
+DEP_JARS="$(ls "$DEPS"/jars/*.jar)"
+DEP_CP="$(printf '%s' "$DEP_JARS" | tr '\n' "$SEP")"
+LIB_RES=()
+for r in "$DEPS"/res/*/; do
+  n="$(basename "$r")"
+  "$BT/aapt2$EXE" compile --dir "$r" -o "build/lib-$n.zip"
+  LIB_RES+=("build/lib-$n.zip")
+done
+
 RES=res
 if [ -n "${CONJURE_URL:-}" ]; then
   case "$CONJURE_URL" in http://*|https://*) ;; *) echo "CONJURE_URL must start with http:// or https://"; exit 1;; esac
@@ -30,16 +43,19 @@ if [ -n "${CONJURE_URL:-}" ]; then
 fi
 "$BT/aapt2$EXE" compile --dir "$RES" -o build/res.zip
 "$BT/aapt2$EXE" link -I "$JAR" --manifest AndroidManifest.xml -o build/unsigned.apk \
-  --java build/gen build/res.zip --auto-add-overlay
+  --java build/gen --extra-packages "$(cat "$DEPS/packages.txt")" \
+  "${LIB_RES[@]}" build/res.zip --auto-add-overlay
 
-javac --release 11 -nowarn -cp "$JAR" -d build/classes \
+javac --release 11 -nowarn -cp "$JAR$SEP$DEP_CP" -d build/classes \
   $(find src build/gen -name '*.java')
 
 "$BT/d8$BAT" --release --min-api 24 --lib "$JAR" --output build/dex \
-  $(find build/classes -name '*.class')
+  $(find build/classes -name '*.class') $DEP_JARS
 
-cp build/dex/classes.dex build/classes.dex
-(cd build && jar uf unsigned.apk classes.dex 2>/dev/null || zip -q unsigned.apk classes.dex)
+cp build/dex/classes*.dex build/
+(cd build && jar uf unsigned.apk classes*.dex 2>/dev/null || zip -q unsigned.apk classes*.dex)
+# ServiceLoader files from the dependencies (kotlinx-coroutines' Main dispatcher).
+(cd "$DEPS/services" && jar uf ../../build/unsigned.apk META-INF 2>/dev/null || zip -qr ../../build/unsigned.apk META-INF)
 
 "$BT/zipalign$EXE" -f -p 4 build/unsigned.apk build/aligned.apk
 
