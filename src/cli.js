@@ -14,10 +14,9 @@ Usage:
   conjure list [--out <dir>]           list deliverables, newest first
 
 Options:
-  --mock     run offline with the scripted provider (default when no API credentials)
+  --mock     run offline with the scripted test provider (never a default; live models only otherwise)
   --model    Claude model id (default claude-opus-5-5, or CONJURE_MODEL)
   --out      output directory for new builds (default ./conjured, or CONJURE_OUT)
-  --flaw     (mock only) inject a bug to demo the verify -> repair loop
   -q         hide streamed model text
 Press Ctrl+C to cancel a run.`;
 
@@ -27,7 +26,6 @@ const { values, positionals } = parseArgs({
     mock: { type: "boolean" },
     model: { type: "string" },
     out: { type: "string" },
-    flaw: { type: "boolean" },
     quiet: { type: "boolean", short: "q" },
     help: { type: "boolean", short: "h" },
   },
@@ -80,7 +78,13 @@ if (isZip) {
   process.exit(0);
 }
 
-const provider = makeProvider({ mock: values.mock ? true : undefined, model: values.model, flaw: values.flaw });
+let provider;
+try {
+  provider = makeProvider({ mock: values.mock ? true : undefined, model: values.model });
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
 const dim = (s) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s) => `\x1b[1m${s}\x1b[0m`;
 

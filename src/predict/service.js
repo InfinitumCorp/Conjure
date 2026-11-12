@@ -8,6 +8,7 @@ import { EventEmitter } from "node:events";
 import { createSimulation, step, writeReport, interview, estimateCalls, claudeComplete, ConjureError } from "./vendor/conjure.ts";
 import { mockComplete, mockReportFetch } from "./mock.js";
 import { openaiComplete, openaiAsAnthropicFetch } from "./openai.js";
+import { mockMode } from "../config.js";
 
 const MAX_QUESTION = 500;
 const MAX_CONTEXT = 30000;
@@ -15,7 +16,10 @@ const MAX_CONTEXT = 30000;
 export function modelSetup({ mock, delayMs } = {}) {
   const apiKey = process.env.ANTHROPIC_API_KEY || "";
   const openUrl = (process.env.CONJURE_LLM_URL || "").replace(/\/+$/, "");
-  const useMock = mock || process.env.CONJURE_MOCK === "1" || (!apiKey && !openUrl);
+  // Live only: the scripted mock runs only under CONJURE_MOCK=1 (the test suite) or when a
+  // caller passes mock explicitly in code; never as a fallback for a missing model.
+  const useMock = mock === true || mockMode();
+  if (!useMock && !apiKey && !openUrl) throw new ConjureError("No live model is configured on this server");
   if (useMock) return { mode: "mock", model: "mock", complete: mockComplete({ delayMs }), llm: { apiKey: "mock", model: "mock", fetchImpl: mockReportFetch() } };
   if (openUrl) {
     // An open-source model on an OpenAI-compatible server (Ollama by default) takes precedence.
@@ -100,6 +104,7 @@ export class PredictionService extends EventEmitter {
   async create({ product, user, source, question, context, agents, rounds, mock, research }) {
     const q = typeof question === "string" ? question.trim() : "";
     if (!q) throw new ConjureError("Ask a question after @conjure");
+    if (!mock && !mockMode() && !process.env.ANTHROPIC_API_KEY && !process.env.CONJURE_LLM_URL) throw new ConjureError("No live model is configured on this server");
     if (q.length > MAX_QUESTION) throw new ConjureError(`Keep the question under ${MAX_QUESTION} characters`);
     if (context !== undefined && typeof context !== "string") throw new ConjureError("context must be text");
     if ((context ?? "").length > MAX_CONTEXT) throw new ConjureError(`Keep the context under ${MAX_CONTEXT} characters`);
@@ -221,7 +226,9 @@ ${seed}` : ""}`;
 
   async ask(rec, agentId, question) {
     if (!rec.sim || rec.status !== "done") throw new ConjureError("Interview agents after the forecast finishes");
-    const setup = modelSetup({ mock: rec.mock || rec.mode === "mock" });
+    // Old offline demo forecasts have a scripted world; there is nothing live to interview.
+    if (rec.mode === "mock" && !mockMode()) throw new ConjureError("That was an offline demo forecast; ask a new question for a live one");
+    const setup = modelSetup({ mock: rec.mode === "mock" });
     const q = typeof question === "string" ? question : "";
     const answer = await interview(setup.complete, rec.sim, String(agentId ?? ""), q, (rec.interviews ?? []).filter((x) => x.agentId === agentId));
     (rec.interviews ??= []).push({ agentId, q: q.slice(0, 1000), a: answer, at: new Date().toISOString() });

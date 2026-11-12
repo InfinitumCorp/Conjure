@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Anthropic from "@anthropic-ai/sdk";
 import { conjure, refine, ConjureError, ConjureCancelled } from "./engine.js";
-import { makeProvider, hasCredentials, DEFAULT_OUT } from "./config.js";
+import { makeProvider, liveModelConfigured, mockMode, DEFAULT_OUT } from "./config.js";
 import { zipDeliverable } from "./zip.js";
 import { cidConfig, startSignIn, finishSignIn, clearPending } from "./cid.js";
 import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
@@ -229,8 +229,10 @@ function friendly(err) {
 }
 
 /** Streams a run's events as server-sent events; aborts the run if the client disconnects. */
-async function runJob(req, res, mock, flaw, job, label) {
+async function runJob(req, res, job, label) {
   if (current) return res.writeHead(409).end("a run is already in progress");
+  // Live only: no model, no run (never a demo build).
+  if (!liveModelConfigured() && !mockMode()) return res.writeHead(503).end("no live model is configured on this server");
   const controller = new AbortController();
   current = { controller, label, startedAt: new Date().toISOString() };
   let finished = false;
@@ -242,7 +244,7 @@ async function runJob(req, res, mock, flaw, job, label) {
 
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   const send = (e) => !res.writableEnded && res.write(`data: ${JSON.stringify(e)}\n\n`);
-  const provider = makeProvider({ mock: mock ? true : undefined, flaw: Boolean(flaw), delayMs: MOCK_DELAY });
+  const provider = makeProvider({ delayMs: MOCK_DELAY });
   send({ type: "start", provider: provider.name, model: provider.model });
 
   const onEvent = (e) => {
@@ -356,7 +358,7 @@ async function handleV1(req, res, url, who) {
 
   if (req.method === "GET" && url.pathname === "/v1/health") {
     // Live on open-weight models (CONJURE_LLM_URL) as well as on Claude, the same test as the dashboard's.
-    const live = Boolean(process.env.CONJURE_LLM_URL || process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1";
+    const live = liveModelConfigured() && !mockMode();
     return json(res, 200, { ok: true, product, live, search: search.configured, ...predictions.stats() });
   }
   if (req.method === "POST" && url.pathname === "/v1/search") return handleSearch(req, res, url, who, product);
@@ -375,7 +377,8 @@ async function handleV1(req, res, url, who) {
       return json(res, 429, { error: `daily limit of ${who.dailyLimit} forecasts reached for ${product}` });
     }
     try {
-      const rec = await predictions.create({ ...body, product, user: body.user, mock: who.kind === "staff" ? body.mock : false });
+      // Live only: a caller can't ask for a demo forecast.
+      const rec = await predictions.create({ ...body, product, user: body.user, mock: false });
       if (who.kind === "product") access.touchProduct(who.record);
       return json(res, 202, publicView(rec));
     } catch (err) {
@@ -435,7 +438,7 @@ async function handleAdmin(req, res, url, who) {
       const products = access.listProducts().map((k) => ({ ...k, day: summarize(recentFor(k.slug)), week: summarize(recentFor(k.slug, 7 * DAY)) }));
       return json(res, 200, {
         me: { name: who.name, role: who.role },
-        live: Boolean(process.env.CONJURE_LLM_URL || process.env.ANTHROPIC_API_KEY) && process.env.CONJURE_MOCK !== "1",
+        live: liveModelConfigured() && !mockMode(),
         model: process.env.CONJURE_LLM_URL
           ? process.env.CONJURE_LLM_MODEL || "qwen2.5:3b"
           : process.env.CONJURE_PREDICT_MODEL || process.env.CONJURE_MODEL || "claude-opus-5-5",
@@ -514,7 +517,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === "GET" && url.pathname === "/api/status") {
     return json(res, 200, {
-      live: hasCredentials(), busy: Boolean(current), previewOrigin: PREVIEW_ORIGIN,
+      live: liveModelConfigured() && !mockMode(), model: liveModelConfigured() && !mockMode() ? makeProvider().model : null, busy: Boolean(current), previewOrigin: PREVIEW_ORIGIN,
       job: current ? { label: current.label, startedAt: current.startedAt } : null,
     });
   }
@@ -554,7 +557,7 @@ const server = http.createServer(async (req, res) => {
       if (typeof payload.intent !== "string" || !payload.intent.trim() || payload.intent.length > 4000) {
         return res.writeHead(400).end("intent must be a non-empty string under 4000 chars");
       }
-      return runJob(req, res, payload.mock, payload.flaw, (provider, signal, onEvent) =>
+      return runJob(req, res, (provider, signal, onEvent) =>
         conjure({ intent: payload.intent, provider, outDir: OUT, signal, onEvent }), payload.intent.slice(0, 120));
     }
     const dir = typeof payload.dir === "string" && !payload.dir.includes("/") && !payload.dir.includes("\\") ? confined(OUT, payload.dir) : null;
@@ -562,7 +565,7 @@ const server = http.createServer(async (req, res) => {
     if (typeof payload.change !== "string" || !payload.change.trim() || payload.change.length > 4000) {
       return res.writeHead(400).end("change must be a non-empty string under 4000 chars");
     }
-    return runJob(req, res, payload.mock, false, (provider, signal, onEvent) =>
+    return runJob(req, res, (provider, signal, onEvent) =>
       refine({ dir, change: payload.change, provider, signal, onEvent }), `refine ${payload.dir}: ${payload.change.slice(0, 100)}`);
   }
   res.writeHead(404).end("not found");
@@ -589,7 +592,7 @@ const preview = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  const mode = hasCredentials() ? "live: Claude" : "offline: mock provider";
+  const mode = mockMode() ? "test mode: scripted mock" : liveModelConfigured() ? `live: ${makeProvider().model}` : "NO LIVE MODEL: builds and forecasts are refused";
   console.log(`✦ Conjure UI on http://${HOST === "127.0.0.1" ? "localhost" : HOST}:${PORT}  (${mode}${ACCESS_TOKEN ? ", sign-in required" : ""})`);
 });
 preview.listen(PREVIEW_PORT, HOST, () => console.log(`  previews on ${PREVIEW_ORIGIN}`));

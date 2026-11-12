@@ -210,3 +210,15 @@ describe("drop-in @conjure routes for products", async () => {
     assert.equal((await off(post({ text: "@conjure q" }), { user: "u1" })).status, 503);
   });
 });
+
+test("live only: with no model configured, a forecast is refused rather than faked", async () => {
+  const saved = { m: process.env.CONJURE_MOCK, u: process.env.CONJURE_LLM_URL, k: process.env.ANTHROPIC_API_KEY };
+  process.env.CONJURE_MOCK = ""; process.env.CONJURE_LLM_URL = ""; process.env.ANTHROPIC_API_KEY = "";
+  try {
+    const { modelSetup } = await import("../src/predict/service.js");
+    assert.throws(() => modelSetup({}), /No live model/);
+    assert.equal(modelSetup({ mock: true }).mode, "mock");
+  } finally {
+    process.env.CONJURE_MOCK = saved.m ?? ""; process.env.CONJURE_LLM_URL = saved.u ?? ""; process.env.ANTHROPIC_API_KEY = saved.k ?? "";
+  }
+});

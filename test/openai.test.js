@@ -85,3 +85,10 @@ test("modelUsage reads the gateway's ledger and is null when unreachable", async
   assert.equal(await modelUsage({ baseUrl: "http://g/v1", fetchImpl: async () => { throw new Error("down"); } }), null);
   assert.equal(await modelUsage({ baseUrl: "" }), null);
 });
+
+test("thinking adds its own budget on top of each call's answer budget", async () => {
+  const { withThinking } = await import("../src/predict/openai.js");
+  assert.equal(withThinking(600, true, 4096), 4696);
+  assert.equal(withThinking(600, false, 4096), 600);
+  assert.equal(withThinking(undefined, true, 4096), undefined);
+});

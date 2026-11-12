@@ -239,3 +239,23 @@ describe("server without sign-in (local default)", () => {
     await fetch(`${s.base}/api/cancel`, { method: "POST" });
   });
 });
+
+describe("live only: a server with no model refuses work instead of faking it", () => {
+  let s;
+  before(async () => {
+    s = await startServer({ CONJURE_MOCK: "", CONJURE_LLM_URL: "", CONJURE_OPEN_WEIGHTS_URL: "", CONJURE_OPEN_WEIGHTS_MODEL: "", CONJURE_PROVIDER: "", ANTHROPIC_AUTH_TOKEN: "", ANTHROPIC_PROFILE: "" });
+  });
+  after(() => s?.stop());
+
+  test("status reports no live model", async () => {
+    const st = await (await fetch(`${s.base}/api/status`)).json();
+    assert.equal(st.live, false);
+    assert.equal(st.model, null);
+  });
+
+  test("a build is refused with 503, even when the request asks for the mock", async () => {
+    const r = await fetch(`${s.base}/api/conjure`, { method: "POST", headers: json, body: JSON.stringify({ intent: "a coin flipper", mock: true, flaw: true }) });
+    assert.equal(r.status, 503);
+    assert.match(await r.text(), /no live model/);
+  });
+});

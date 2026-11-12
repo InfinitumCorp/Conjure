@@ -140,10 +140,6 @@
       <button id="go" class="btn-primary">Conjure</button>
       <button id="stop" class="btn-secondary" disabled>Stop</button>
     </div>
-    <div class="options">
-      <label class="check"><input type="checkbox" id="mock"> Offline (mock)</label>
-      <label class="check"><input type="checkbox" id="flaw"> Inject a bug</label>
-    </div>
     <details class="logwrap" open>
       <summary>Build log</summary>
       <div class="log" id="log" aria-live="polite"></div>
@@ -207,8 +203,8 @@ async function refresh(selectDir) {
   if (sr.status === 401) { location.href = "/login"; return; }
   const s = await sr.json();
   previewOrigin = s.previewOrigin;
-  $("mode").textContent = s.live ? "Live · Claude" : "Offline · mock builds (add an Anthropic API key for live Claude)";
-  if (!s.live) $("mock").checked = true;
+  $("mode").textContent = s.live ? `Live · ${String(s.model || "").replace(/^gpt:\/\/[^/]+\//, "").replace(/^@cf\/[^/]+\//, "")}` : "No live model is configured on this server";
+  $("go").disabled = !s.live;
   watchServerRun(s);
   const h = await (await fetch("/api/history")).json();
   $("hist").innerHTML = "";
@@ -292,13 +288,13 @@ async function run(url, body) {
 $("go").onclick = () => {
   const intent = $("intent").value.trim();
   if (!intent) return $("intent").focus();
-  run("/api/conjure", { intent, mock: $("mock").checked, flaw: $("flaw").checked });
+  run("/api/conjure", { intent });
 };
 $("apply").onclick = () => {
   const change = $("change").value.trim();
   if (!selected || !change) return $("change").focus();
   $("change").value = "";
-  run("/api/refine", { dir: selected.dir, change, mock: $("mock").checked });
+  run("/api/refine", { dir: selected.dir, change });
 };
 $("stop").onclick = async () => {
   await fetch("/api/cancel", { method: "POST" }).catch(() => {});
