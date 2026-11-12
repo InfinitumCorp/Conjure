@@ -1,9 +1,12 @@
 // Who may use this Conjure server.
 //   People sign in with Cumulus ID (id.cumuluscloud.app), never a token typed into a form:
+//   Users:    anyone with a Cumulus ID. Each account sees, cancels and downloads only its own
+//             builds, and gets what its Conjure plan allows (see plans.js).
 //   Owner:    a Cumulus ID listed in CID_OWNERS. Full admin. CONJURE_ACCESS_TOKEN turns access
 //             control on and signs session cookies; scripts may still send it as a Bearer token.
 //   Staff:    Infinitum staff, matched by their Cumulus ID (or email until it is linked). Role
-//             "admin" or "staff". Each also gets a cjs_ token, for scripts only.
+//             "admin" or "staff". Each also gets a cjs_ token, for scripts only. Admins can see
+//             every account's builds and runs; staff work in their own space like users.
 //   Products: one key per product (cjp_<slug>_...). Only the /v1 prediction API.
 // Tokens are stored as SHA-256 hashes; the plain token is shown once when created.
 import crypto from "node:crypto";
@@ -31,7 +34,7 @@ export class AccessStore {
   constructor({ file, ownerToken }) {
     this.file = file;
     this.ownerToken = ownerToken || "";
-    this.data = { staff: [], products: [] };
+    this.data = { staff: [], products: [], users: [] };
     this.usageFile = path.join(path.dirname(file), "usage.jsonl");
     // Cookie signing key: derived from the owner token so sessions survive restarts.
     this.secret = crypto.createHmac("sha256", this.ownerToken || crypto.randomBytes(32)).update("conjure-session-v2").digest();
@@ -40,7 +43,7 @@ export class AccessStore {
   async load() {
     await fs.mkdir(path.dirname(this.file), { recursive: true });
     try {
-      this.data = { staff: [], products: [], ...JSON.parse(await fs.readFile(this.file, "utf8")) };
+      this.data = { staff: [], products: [], users: [], ...JSON.parse(await fs.readFile(this.file, "utf8")) };
     } catch {}
     return this;
   }
@@ -89,6 +92,32 @@ export class AccessStore {
     return { kind: "staff", id: s.id, name: s.name, role: s.role };
   }
 
+  /** Staff or owner when listed; otherwise the person's own Conjure account, created on first sign-in. */
+  async signInByCid(profile, owners = []) {
+    return (await this.staffByCid(profile, owners)) || this.userByCid(profile);
+  }
+
+  /** The account for a Cumulus ID. Ids are a keyed hash of the cid, so they can't be guessed. */
+  async userByCid(profile) {
+    if (!profile?.cid) return null;
+    const id = `u_${crypto.createHmac("sha256", this.secret).update(`cid:${profile.cid}`).digest("hex").slice(0, 24)}`;
+    let u = this.data.users.find((x) => x.id === id);
+    const name = String(profile.username || profile.handle || profile.email || "").trim().slice(0, 80) || "Cumulus ID";
+    if (!u) {
+      u = { id, cid: String(profile.cid).slice(0, 120), name, createdAt: now() };
+      this.data.users.push(u);
+    } else if (u.revokedAt) {
+      return null;
+    }
+    Object.assign(u, { name, lastSignInAt: now() });
+    await this.save();
+    return this.userPrincipal(u);
+  }
+
+  userPrincipal(u) {
+    return { kind: "user", id: u.id, name: u.name, role: "user" };
+  }
+
   productByKey(key) {
     if (!key?.startsWith("cjp_")) return null;
     const h = sha(key);
@@ -104,15 +133,75 @@ export class AccessStore {
     return `${body}.${crypto.createHmac("sha256", this.secret).update(body).digest("base64url")}`;
   }
 
-  staffBySession(value) {
+  /** The owner, a staff member or a user, from a session cookie. */
+  bySession(value) {
     const parts = String(value || "").split(".");
     if (parts.length !== 3) return null;
     const [id, exp, mac] = parts;
     if (!safeEqual(mac, crypto.createHmac("sha256", this.secret).update(`${id}.${exp}`).digest("base64url"))) return null;
     if (!(Number(exp) > Date.now())) return null;
     if (id === "owner") return this.owner();
+    if (id.startsWith("u_")) {
+      const u = this.data.users.find((x) => x.id === id && !x.revokedAt);
+      return u ? this.userPrincipal(u) : null;
+    }
     const s = this.data.staff.find((x) => x.id === id && !x.revokedAt);
     return s ? { kind: "staff", id: s.id, name: s.name, role: s.role } : null;
+  }
+
+  /* ---- per-account space ---- */
+
+  /**
+   * The folder name for a principal's builds under the output directory. A keyed hash, so preview
+   * URLs (served without sign-in, from another origin) can't be guessed from an account id.
+   */
+  spaceFor(principal) {
+    return `k_${crypto.createHmac("sha256", this.secret).update(`space:${principal.id}`).digest("hex").slice(0, 24)}`;
+  }
+
+  /** Verified builds this account has made this calendar month (UTC). */
+  buildsThisMonth(principal) {
+    const month = now().slice(0, 7);
+    const u = this.usageRow(principal);
+    return u.month === month ? u.builds : 0;
+  }
+
+  async countBuild(principal) {
+    const month = now().slice(0, 7);
+    const u = this.usageRow(principal);
+    if (u.month !== month) Object.assign(u, { month, builds: 0 });
+    u.builds += 1;
+    await this.save().catch(() => {});
+  }
+
+  usageRow(principal) {
+    this.data.builds ??= {};
+    return (this.data.builds[principal.id] ??= { month: now().slice(0, 7), builds: 0 });
+  }
+
+  /* ---- the person's Cumulus ID access token, sealed into its own cookie ---- */
+
+  /** AES-256-GCM, bound to the account, so it can't be read or moved to another account. */
+  sealToken(principal, token, maxAgeS) {
+    const key = crypto.createHash("sha256").update(this.secret).update("cid-token-v1").digest();
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv("aes-256-gcm", key, iv);
+    const body = Buffer.concat([c.update(JSON.stringify({ u: principal.id, t: token, exp: Date.now() + maxAgeS * 1000 }), "utf8"), c.final()]);
+    return Buffer.concat([iv, c.getAuthTag(), body]).toString("base64url");
+  }
+
+  openToken(principal, value) {
+    try {
+      const raw = Buffer.from(String(value || ""), "base64url");
+      if (raw.length < 29) return null;
+      const key = crypto.createHash("sha256").update(this.secret).update("cid-token-v1").digest();
+      const d = crypto.createDecipheriv("aes-256-gcm", key, raw.subarray(0, 12));
+      d.setAuthTag(raw.subarray(12, 28));
+      const v = JSON.parse(Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString("utf8"));
+      return v.u === principal.id && v.exp > Date.now() && typeof v.t === "string" ? v.t : null;
+    } catch {
+      return null;
+    }
   }
 
   /* ---- admin actions ---- */
@@ -182,6 +271,10 @@ export class AccessStore {
 
   listStaff() {
     return this.data.staff.map((s) => this.publicStaff(s));
+  }
+
+  listUsers() {
+    return this.data.users.map(({ cid: _c, ...u }) => ({ ...u, buildsThisMonth: this.buildsThisMonth(u) }));
   }
 
   listProducts() {
