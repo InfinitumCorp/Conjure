@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Web UI for Conjure. Binds to 127.0.0.1 by default (HOST to change). When
 // CONJURE_ACCESS_TOKEN is set (cloud deploys), every page and API call needs a login.
+import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -48,7 +49,7 @@ const predictions = new PredictionService({
 await predictions.load();
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };
-const STATIC = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png",
+const STATIC = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/account-bar.js",
   // Interface language (@infinitum/i18n): runtime and build-time catalogs, public, no model calls.
   "/i18n/i18n.js", "/i18n/i18n.css", "/i18n/start.js", "/i18n/catalogs.js"]);
 
@@ -81,6 +82,22 @@ async function readJson(req, limit = 16 * 1024) {
 
 // --- Access control (only when CONJURE_ACCESS_TOKEN is set; otherwise local and open) ---
 const COOKIE = "conjure_session";
+// Who signed in (name and @cumuluscloud.app address from Cumulus ID), signed with the session
+// secret, for the Cumulus://ID account bar (GET /api/me). The session cookie alone decides access.
+const WHO_COOKIE = "conjure_who";
+const whoCookie = (profile) => {
+  const who = {};
+  for (const k of ["name", "username", "email"]) if (typeof profile?.[k] === "string" && profile[k]) who[k] = profile[k].slice(0, 200);
+  const body = Buffer.from(JSON.stringify(who)).toString("base64url");
+  return `${body}.${crypto.createHmac("sha256", access.secret).update(`who|${body}`).digest("base64url")}`;
+};
+const readWho = (value) => {
+  const [body, mac] = String(value || "").split(".");
+  if (!body || !mac) return null;
+  const want = crypto.createHmac("sha256", access.secret).update(`who|${body}`).digest("base64url");
+  if (mac.length !== want.length || !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(want))) return null;
+  try { return JSON.parse(Buffer.from(body, "base64url").toString("utf8")); } catch { return null; }
+};
 
 function cookies(req) {
   const out = {};
@@ -164,12 +181,13 @@ async function handleLogin(req, res, url) {
   if (url.pathname === "/login") return req.method === "GET" ? loginPage(res, 200, "") : res.writeHead(405, { allow: "GET" }).end();
   if (req.method !== "GET") return res.writeHead(405, { allow: "GET" }).end();
   if (url.pathname === "/auth/cid/start") {
-    const go = startSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, create: url.searchParams.get("create") === "1", secure });
+    const create = url.searchParams.get("create") === "1" || url.searchParams.get("prompt") === "create";
+    const go = startSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, create, secure });
     return res.writeHead(302, { location: go.location, "set-cookie": go.cookie }).end();
   }
-  let who;
+  let who, profile;
   try {
-    const { profile } = await finishSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, query: url.searchParams, cookies: cookies(req) });
+    ({ profile } = await finishSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, query: url.searchParams, cookies: cookies(req) }));
     who = await access.staffByCid(profile, CID.owners);
     if (!who) {
       res.setHeader("set-cookie", clearPending(secure));
@@ -183,14 +201,21 @@ async function handleLogin(req, res, url) {
   // Lax, not Strict: the browser arrives here from the Cumulus ID redirect.
   res.writeHead(303, {
     location: "/",
-    "set-cookie": [`${COOKIE}=${access.sessionFor(who)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${s}`, clearPending(secure)],
+    "set-cookie": [
+      `${COOKIE}=${access.sessionFor(who)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${s}`,
+      `${WHO_COOKIE}=${whoCookie(profile)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${s}`,
+      clearPending(secure),
+    ],
   });
   res.end();
 }
 
 function logout(req, res) {
   const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
-  res.writeHead(303, { location: "/login", "set-cookie": `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}` }).end();
+  res.writeHead(303, {
+    location: "/login",
+    "set-cookie": [`${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`, `${WHO_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`],
+  }).end();
 }
 
 const json = (res, status, data) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(data));
@@ -503,7 +528,16 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname.startsWith("/v1/")) return handleV1(req, res, url, who);
   // Product keys reach only the /v1 API; the dashboard and studio are for staff.
   if (who.kind !== "staff") return json(res, 403, { error: "product keys can only call /v1" });
-  if (url.pathname === "/logout" && req.method === "POST") return logout(req, res);
+  // The Cumulus://ID account bar signs out by navigating here (GET); only same-origin navigations
+  // count, so another site cannot sign people out.
+  if (url.pathname === "/logout" && (req.method === "POST" || (req.method === "GET" && req.headers["sec-fetch-site"] === "same-origin"))) {
+    return logout(req, res);
+  }
+  // Who is signed in, for the account bar (window.CumulusBar.setProfile).
+  if (req.method === "GET" && url.pathname === "/api/me") {
+    const p = readWho(cookies(req)[WHO_COOKIE]) || {};
+    return json(res, 200, { name: p.name || who.name, username: p.username || "", email: p.email || "", role: who.role, local: who.id === "local" });
+  }
   if (url.pathname.startsWith("/api/admin/")) return handleAdmin(req, res, url, who);
 
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
