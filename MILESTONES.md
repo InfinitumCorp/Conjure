@@ -33,7 +33,7 @@ Status key: ✅ done · 🔨 in progress · ⏳ blocked · ⬜ not started
 - ✅ Download a deliverable as a zip: `conjure zip <dir>` or the UI's **Download .zip** button (zero-dependency writer, transcript excluded, verified with Python's `zipfile` and Windows `Expand-Archive`)
 - ✅ Conjure lives in `Documents/Conjure` under git
 - ✅ Installable web app (manifest, icons) and Android app (`android/`, built without Gradle, tested on a TECNO KM4 / Android 15)
-- ✅ Hosted on AWS (us-east-2): EC2 + Caddy HTTPS on sslip.io, sign-in token, secrets in SSM, one-command deploy (`deploy/aws/deploy.mjs`)
+- ✅ Hosted on AWS (us-east-2): EC2 + Caddy HTTPS on sslip.io, sign-in token, secrets in SSM, one-command deploy (`deploy/aws/deploy.mjs`). Retired: Conjure moved to its own Russia server, `conjure-russia` (InfinitumCorp/conjure-ru)
 - ✅ Hardening: security headers, cross-site and non-JSON POSTs refused, run records private on the preview host, runs survive dropped connections
 - ⬜ One-click deploy of a *deliverable* (e.g. Vercel; needs the Vercel connector authorized via `/mcp`)
 

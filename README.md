@@ -12,7 +12,20 @@ Conjure is not a consumer product. It is the model that runs inside Infinitum pr
 - **Staff dashboard** (`/`, private). Sign in with Cumulus ID ("Create a Cumulus ID" is on the same screen). The owner is whoever is in `CID_OWNERS`; admins add staff by their Cumulus ID email or CID. Status, a "Try @conjure" console with live rounds, every forecast across products, product keys (issue, rotate, revoke) and staff (admins add and revoke people). Tokens and keys are stored hashed and shown once. The builder studio moved to `/studio`.
 - **Offline.** Without `ANTHROPIC_API_KEY` forecasts run on a deterministic mock and are labelled "mock".
 
-Data (staff, keys, forecasts, `usage.jsonl`) is kept in `CONJURE_DATA` (default `./conjure-data`; `/var/lib/conjure-data` on AWS), never under the preview folder.
+Data (staff, keys, forecasts, `usage.jsonl`) is kept in `CONJURE_DATA` (default `./conjure-data`; `/var/lib/conjure-data` on the server), never under the preview folder.
+
+## Where it runs
+
+Conjure has its own server in Russia: VM `conjure-russia` on Yandex Cloud (ru-central1-a, static IP), set up from [InfinitumCorp/conjure-ru](https://github.com/InfinitumCorp/conjure-ru), which pins this repo by commit.
+
+| Hostname | Route |
+|---|---|
+| `https://conjure-ru.infinitumcorporation.ai` | Direct to the Russia server (DNS only) |
+| `https://conjure.infinitumcorporation.ai` | Cloudflare Worker (`conjure-ru/front`) that forwards to the same server, for networks that block Yandex Cloud |
+
+Products set `CONJURE_URL` to one of those two hostnames. The Russia server runs open-weight models on Yandex AI Studio and never calls Claude.
+
+The AWS deploy below is **retired**: the EC2 stack (`deploy/aws`, us-east-2) is to be destroyed with `node deploy/aws/deploy.mjs --destroy --yes` once nothing points at its `sslip.io` hostnames. Don't deploy new copies there.
 
 ## How it works
 
@@ -62,7 +75,7 @@ Environment variables: `CONJURE_MODEL`, `CONJURE_OUT` (default `./conjured`), `C
 
 ```bash
 bash android/build.sh                               # -> android/build/conjure.apk (needs Android SDK + JDK)
-CONJURE_URL=https://app.<ip>.sslip.io bash android/build.sh   # same, opening your AWS server by default
+CONJURE_URL=https://conjure.infinitumcorporation.ai bash android/build.sh   # same, opening Conjure's server by default
 adb install -r android/build/conjure.apk
 adb reverse tcp:4317 tcp:4317 && adb reverse tcp:4318 tcp:4318
 npm start                                           # the app opens http://localhost:4317 on the phone
@@ -70,7 +83,10 @@ npm start                                           # the app opens http://local
 
 To point the app at another server: use **Use this server** on its "Can't reach Conjure" screen, or `adb shell am start -n com.conjure.app/.MainActivity --es url http://host:4317/` (remembered). Zip downloads go to the phone's Downloads folder and carry the sign-in session.
 
-## Deploy to AWS
+## Deploy to AWS (retired)
+
+Kept only so the old stack can be inspected and destroyed. Conjure's server is `conjure-russia` (see **Where it runs**).
+
 
 `deploy/aws/` runs Conjure on one EC2 instance (Amazon Linux 2023, `t4g.small` by default, roughly $15/month with its Elastic IP). Caddy serves it over HTTPS on two free `sslip.io` hostnames: `app.<ip>.sslip.io` for the UI and `preview.<ip>.sslip.io` for previews, so generated code stays on a separate origin.
 
