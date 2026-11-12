@@ -8,6 +8,8 @@ export default defineConfig({
     name: "conjure-llm",
     entrypoint,
     compatibilityDate: "2026-10-01",
+    // Global users run on US servers (Ashburn, Virginia); Russia is served by the ru.* copies on Yandex Cloud.
+    placement: { region: "gcp:us-east4" },
     exports: {
       // Per-day neuron ledger that keeps Workers AI inside its free allowance.
       Budget: exports.durableObject({ storage: "sqlite" }),
