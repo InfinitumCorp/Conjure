@@ -45,7 +45,7 @@ async function readStream(res) {
 
 /** A stand-in Cumulus ID issuer: the code names the person who signed in. */
 async function fakeIssuer() {
-  const people = { owner: { cid: "cid_owner", username: "william" }, stranger: { cid: "cid_stranger", username: "nobody" } };
+  const people = { owner: { cid: "cid_owner", username: "william", name: "William", email: "william@cumuluscloud.app" }, stranger: { cid: "cid_stranger", username: "nobody" } };
   const seen = [];
   const server = http.createServer(async (req, res) => {
     let body = "";
@@ -151,6 +151,22 @@ describe("server with sign-in (CONJURE_ACCESS_TOKEN set)", () => {
     cookie = set.split(";")[0];
     assert.equal((await fetch(`${s.base}/`, { headers: { cookie } })).status, 200);
     assert.equal((await fetch(`${s.base}/api/history`, { headers: { cookie } })).status, 200);
+  });
+
+  test("the account bar learns who is signed in, and a same-origin GET /logout signs out", async () => {
+    const r = await signIn(s.base, "owner");
+    const jar = r.headers.getSetCookie().filter((c) => /^conjure_(session|who)=/.test(c)).map((c) => c.split(";")[0]).join("; ");
+    const me = await (await fetch(`${s.base}/api/me`, { headers: { cookie: jar } })).json();
+    assert.deepEqual([me.name, me.username, me.email, me.role], ["William", "william", "william@cumuluscloud.app", "admin"]);
+    assert.equal((await fetch(`${s.base}/api/me`)).status, 401);
+    const cross = await fetch(`${s.base}/logout`, { redirect: "manual", headers: { cookie: jar, "sec-fetch-site": "cross-site" } });
+    assert.notEqual(cross.headers.get("location"), "/login", "another site must not sign people out");
+    const out = await fetch(`${s.base}/logout`, { redirect: "manual", headers: { cookie: jar, "sec-fetch-site": "same-origin" } });
+    assert.equal(out.status, 303);
+    assert.equal(out.headers.get("location"), "/login");
+    assert.ok(out.headers.getSetCookie().some((c) => c.startsWith("conjure_session=;")));
+    const create = await fetch(`${s.base}/auth/cid/start?prompt=create`, { redirect: "manual" });
+    assert.equal(new URL(create.headers.get("location")).searchParams.get("prompt"), "create");
   });
 
   test("a Bearer token works for scripts", async () => {

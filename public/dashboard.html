@@ -24,6 +24,8 @@
   .topbar .brand { font-size:18px; letter-spacing:-.02em; text-decoration:none; }
   .topbar nav { display:flex; gap:18px; align-items:baseline; font-size:14px; color:var(--muted); flex-wrap:wrap; }
   .topbar nav a { text-decoration:none; } .topbar form { margin:0; }
+  .topbar nav { margin-left:auto; } .topbar-cid { align-self:center; }
+  @media (max-width:640px) { .topbar nav { order:3; margin-left:0; } .topbar-cid { order:2; margin-left:auto; } }
   .linkbtn { background:none; border:0; padding:0; cursor:pointer; color:var(--muted); font-size:14px; text-decoration:underline; text-underline-offset:3px; }
   .linkbtn:hover { color:var(--accent); }
   .hero { padding:clamp(40px,7vw,96px) var(--gutter) clamp(28px,4vw,56px); border-bottom:1px solid var(--line); }
@@ -97,6 +99,10 @@
 </style>
 <link rel="stylesheet" href="/i18n/i18n.css" />
 <script type="module" src="/i18n/start.js"></script>
+<!-- The Cumulus://ID account bar (live at id.cumuluscloud.app from the Cumulus://ID cut-over).
+     Conjure keeps its own session, so sign-in and sign-out go to its own routes. -->
+<script src="https://id.cumuluscloud.app/id/bar.js" data-client="conjure" data-signin="/auth/cid/start" data-signout="/logout" defer></script>
+<script src="/account-bar.js" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to the dashboard</a>
@@ -110,6 +116,7 @@
     <a href="/studio">Studio</a>
     <form method="post" action="/logout" id="logoutForm" hidden><button class="linkbtn">Sign out</button></form>
   </nav>
+  <div class="topbar-cid" data-cumulus-bar data-create="false" hidden></div>
 </header>
 <section class="hero" aria-labelledby="hero-title">
   <h1 id="hero-title">Conjure<sup class="tm">™</sup></h1>
