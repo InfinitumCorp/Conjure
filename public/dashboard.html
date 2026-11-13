@@ -459,5 +459,7 @@ refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 10000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>
+<script src="/amplitude.vendor.js" defer></script>
+<script src="/amplitude-boot.js" defer></script>
 </body>
 </html>
