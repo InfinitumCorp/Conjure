@@ -123,10 +123,16 @@ describe("server with sign-in (CONJURE_ACCESS_TOKEN set)", () => {
     assert.equal(await via("evil.example"), `${s.base}/auth/cid/callback`);
   });
 
-  test("a Cumulus ID that is not on the staff list is refused", async () => {
+  test("any Cumulus ID can sign in, and gets the studio but not the staff dashboard or APIs", async () => {
     const r = await signIn(s.base, "stranger");
-    assert.equal(r.status, 403);
-    assert.doesNotMatch(r.headers.get("set-cookie") || "", /conjure_session=[^;]/);
+    assert.equal(r.status, 303);
+    const c = r.headers.getSetCookie().find((x) => x.startsWith("conjure_session=")).split(";")[0];
+    const home = await fetch(`${s.base}/`, { headers: { cookie: c } });
+    assert.equal(home.status, 200);
+    assert.match(await home.text(), /id="intent"/, "people land in the studio");
+    assert.equal((await fetch(`${s.base}/dashboard`, { headers: { cookie: c } })).status, 403);
+    assert.equal((await fetch(`${s.base}/api/admin/overview`, { headers: { cookie: c } })).status, 403);
+    assert.equal((await fetch(`${s.base}/v1/health`, { headers: { cookie: c } })).status, 403);
   });
 
   test("a forged state is refused", async () => {
@@ -173,9 +179,13 @@ describe("server with sign-in (CONJURE_ACCESS_TOKEN set)", () => {
     const done = events.find((e) => e.type === "done");
     assert.ok(done, `no done event: ${JSON.stringify(events.slice(-3))}`);
     assert.equal(done.manifest.verification.ok, true);
-    assert.equal((await fetch(`${s.preview}/${done.dir}/index.html`)).status, 200);
-    assert.equal((await fetch(`${s.preview}/${done.dir}/conjure.json`)).status, 404);
-    assert.equal((await fetch(`${s.preview}/${done.dir}/transcript.jsonl`)).status, 404);
+    const { previewBase } = await (await fetch(`${s.base}/api/status`, { headers: { cookie } })).json();
+    const space = previewBase.split("/").pop();
+    assert.match(space, /^k_[0-9a-f]{24}$/);
+    assert.equal((await fetch(`${s.preview}/${space}/${done.dir}/index.html`)).status, 200);
+    assert.equal((await fetch(`${s.preview}/${done.dir}/index.html`)).status, 404, "builds are only served under their account's space");
+    assert.equal((await fetch(`${s.preview}/${space}/${done.dir}/conjure.json`)).status, 404);
+    assert.equal((await fetch(`${s.preview}/${space}/${done.dir}/transcript.jsonl`)).status, 404);
     assert.equal((await fetch(`${s.preview}/..%2F..%2Fpackage.json`)).status, 400);
     const zip = await fetch(`${s.base}/api/download?dir=${done.dir}`, { headers: { cookie } });
     assert.equal(zip.status, 200);

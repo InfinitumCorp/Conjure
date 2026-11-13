@@ -11,6 +11,7 @@ import { makeProvider, liveModelConfigured, mockMode, DEFAULT_OUT } from "./conf
 import { zipDeliverable } from "./zip.js";
 import { cidConfig, startSignIn, finishSignIn, clearPending } from "./cid.js";
 import { AccessStore, KNOWN_PRODUCTS } from "./access.js";
+import { PlanLookup } from "./plans.js";
 import { PredictionService, publicView } from "./predict/service.js";
 import { SearchService } from "./search/index.js";
 import { modelUsage } from "./predict/openai.js";
@@ -46,13 +47,40 @@ const predictions = new PredictionService({
   onFinish: (rec) => access.logUsage({ kind: "prediction", id: rec.id, product: rec.product, user: rec.user, status: rec.status, ms: rec.ms, calls: rec.sim?.calls ?? 0, mode: rec.mode }),
 });
 await predictions.load();
+// Plans come from the Cumulus billing hub (CONJURE_BILLING_URL can point at a mirror). No Stripe keys here.
+const plans = new PlanLookup({ hub: process.env.CONJURE_BILLING_URL });
+// Builds running at once across every account (each build is a model conversation plus checks).
+const MAX_JOBS = Math.max(1, Number(process.env.CONJURE_MAX_JOBS) || 4);
+const LOCAL = { kind: "staff", id: "local", name: "Local", role: "admin" };
+
+// Every account builds in its own folder: OUT/<space>/<deliverable>. Deliverables from before
+// accounts existed (directly in OUT) belong to the owner, so they move into the owner's space once.
+{
+  const ownerSpace = path.join(OUT, access.spaceFor(access.enabled ? access.owner() : LOCAL));
+  let legacy = [];
+  try {
+    legacy = (await fs.readdir(OUT, { withFileTypes: true })).filter((d) => d.isDirectory() && !/^k_[0-9a-f]{24}$/.test(d.name));
+  } catch {}
+  for (const d of legacy) {
+    try {
+      await fs.access(path.join(OUT, d.name, "conjure.json"));
+      await fs.mkdir(ownerSpace, { recursive: true });
+      await fs.rename(path.join(OUT, d.name), path.join(ownerSpace, d.name));
+    } catch {}
+  }
+}
 
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".ico": "image/x-icon", ".webmanifest": "application/manifest+json" };
 const STATIC = new Set(["/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png",
   // Interface language (@infinitum/i18n): runtime and build-time catalogs, public, no model calls.
   "/i18n/i18n.js", "/i18n/i18n.css", "/i18n/start.js", "/i18n/catalogs.js"]);
 
-let current = null; // { controller } while a run is in progress
+/** Runs in progress: id -> { id, space, by, controller, label, startedAt }. Each belongs to one account. */
+const jobs = new Map();
+let jobSeq = 0;
+const jobsOf = (space) => [...jobs.values()].filter((j) => j.space === space);
+const jobView = (j, all = false) => ({ id: j.id, label: j.label, startedAt: j.startedAt, ...(all ? { by: j.by } : {}) });
+const SPACE_RE = /^k_[0-9a-f]{24}$/;
 
 function confined(root, rel) {
   const target = path.resolve(root, rel);
@@ -81,6 +109,9 @@ async function readJson(req, limit = 16 * 1024) {
 
 // --- Access control (only when CONJURE_ACCESS_TOKEN is set; otherwise local and open) ---
 const COOKIE = "conjure_session";
+// The person's Cumulus ID access token, sealed (see AccessStore.sealToken), for plan lookups.
+const TOKEN_COOKIE = "conjure_cid";
+const isAdmin = (who) => who.kind === "staff" && who.role === "admin";
 
 function cookies(req) {
   const out = {};
@@ -95,12 +126,12 @@ function cookies(req) {
   return out;
 }
 
-/** Staff (owner token, staff token or session cookie), a product (product key), or null. */
+/** A user or staff member (session cookie, owner or staff token), a product (product key), or null. */
 function principal(req) {
   const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization || "")?.[1]?.trim();
   if (bearer) return access.staffByToken(bearer) || access.productByKey(bearer);
-  if (!access.enabled) return { kind: "staff", id: "local", name: "Local", role: "admin" };
-  return access.staffBySession(cookies(req)[COOKIE]);
+  if (!access.enabled) return LOCAL;
+  return access.bySession(cookies(req)[COOKIE]);
 }
 
 /** Rejects cross-site writes: browsers send Origin on POST, and it must match this host. */
@@ -136,7 +167,7 @@ input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline
 footer{padding:22px clamp(16px,4vw,48px);border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 footer .tm{font-size:.65em}</style></head><body>
 <main><form method="get" action="/auth/cid/start"><h1>Conjure<sup class="tm">™</sup></h1>
-<p>Private to Infinitum staff. Sign in with your Cumulus ID.</p>
+<p>Sign in with your Cumulus ID to build. New here? Create one in the same step; it's free.</p>
 ${error ? `<p class="err" role="alert">${error}</p>` : ""}
 <button autofocus>Sign in with Cumulus ID</button>
 <p>No Cumulus ID yet? <button class="link" name="create" value="1">Create a Cumulus ID</button></p></form></main>
@@ -167,14 +198,16 @@ async function handleLogin(req, res, url) {
     const go = startSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, create: url.searchParams.get("create") === "1", secure });
     return res.writeHead(302, { location: go.location, "set-cookie": go.cookie }).end();
   }
-  let who;
+  let who, token;
   try {
-    const { profile } = await finishSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, query: url.searchParams, cookies: cookies(req) });
-    who = await access.staffByCid(profile, CID.owners);
+    const signedIn = await finishSignIn({ ...CID, redirectUri: redirectUri(req), secret: access.secret, query: url.searchParams, cookies: cookies(req) });
+    // Any Cumulus ID may sign in: owners and listed staff as staff, everyone else with their own account.
+    who = await access.signInByCid(signedIn.profile, CID.owners);
     if (!who) {
       res.setHeader("set-cookie", clearPending(secure));
-      return loginPage(res, 403, "This Cumulus ID is not on the Conjure staff list. Ask an admin to add you.");
+      return loginPage(res, 403, "This Cumulus ID can't use Conjure. Contact info@infinitumcorporation.ai.");
     }
+    token = signedIn.token ? { value: signedIn.token, maxAge: Math.min(signedIn.expiresIn ?? 2592000, 2592000) } : null;
   } catch (e) {
     res.setHeader("set-cookie", clearPending(secure));
     return loginPage(res, 401, e.message);
@@ -183,37 +216,50 @@ async function handleLogin(req, res, url) {
   // Lax, not Strict: the browser arrives here from the Cumulus ID redirect.
   res.writeHead(303, {
     location: "/",
-    "set-cookie": [`${COOKIE}=${access.sessionFor(who)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${s}`, clearPending(secure)],
+    "set-cookie": [
+      `${COOKIE}=${access.sessionFor(who)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${s}`,
+      token
+        ? `${TOKEN_COOKIE}=${access.sealToken(who, token.value, token.maxAge)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${token.maxAge}${s}`
+        : `${TOKEN_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${s}`,
+      clearPending(secure),
+    ],
   });
+  plans.forget(who.id);
   res.end();
 }
 
 function logout(req, res) {
   const secure = req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
-  res.writeHead(303, { location: "/login", "set-cookie": `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}` }).end();
+  res.writeHead(303, { location: "/login", "set-cookie": [`${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`, `${TOKEN_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`] }).end();
 }
 
 const json = (res, status, data) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(data));
 
-async function history() {
+/** The folder that holds one account's builds. */
+const spaceDir = (space) => path.join(OUT, space);
+
+/** Builds in the given spaces (one account's, or every account's for an admin), newest first. */
+async function history(spaces, { tagged = false } = {}) {
   const out = [];
-  let dirs = [];
-  try {
-    dirs = await fs.readdir(OUT, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const d of dirs) {
-    if (!d.isDirectory()) continue;
+  for (const space of spaces) {
+    let dirs = [];
     try {
-      const m = JSON.parse(await fs.readFile(path.join(OUT, d.name, "conjure.json"), "utf8"));
-      const last = m.history?.at(-1);
-      out.push({
-        dir: d.name, name: m.plan?.name, intent: m.intent, ok: m.verification?.ok, files: m.files,
-        createdAt: m.createdAt, updatedAt: last?.at ?? m.createdAt, provider: m.provider, costUsd: m.costUsd,
-        changes: (m.history ?? []).map((h) => h.change),
-      });
-    } catch {}
+      dirs = await fs.readdir(spaceDir(space), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const d of dirs) {
+      if (!d.isDirectory()) continue;
+      try {
+        const m = JSON.parse(await fs.readFile(path.join(spaceDir(space), d.name, "conjure.json"), "utf8"));
+        const last = m.history?.at(-1);
+        out.push({
+          dir: d.name, ...(tagged ? { space } : {}), name: m.plan?.name, intent: m.intent, ok: m.verification?.ok, files: m.files,
+          createdAt: m.createdAt, updatedAt: last?.at ?? m.createdAt, provider: m.provider, costUsd: m.costUsd,
+          changes: (m.history ?? []).map((h) => h.change),
+        });
+      } catch {}
+    }
   }
   return out.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
@@ -228,13 +274,28 @@ function friendly(err) {
   return "unexpected error";
 }
 
-/** Streams a run's events as server-sent events; aborts the run if the client disconnects. */
-async function runJob(req, res, job, label) {
-  if (current) return res.writeHead(409).end("a run is already in progress");
+/** The plan that applies to a principal: staff by role, users from the Cumulus billing hub. */
+async function planOf(req, who) {
+  if (who.kind !== "user") return { plan: plans.table.staff, status: "ok" };
+  return plans.planFor(who.id, access.openToken(who, cookies(req)[TOKEN_COOKIE]));
+}
+
+/** Streams a run's events as server-sent events. Each run belongs to the account that started it. */
+async function runJob(req, res, who, job, label) {
   // Live only: no model, no run (never a demo build).
   if (!liveModelConfigured() && !mockMode()) return res.writeHead(503).end("no live model is configured on this server");
+  const space = access.spaceFor(who);
+  const { plan } = await planOf(req, who);
+  if (jobsOf(space).length >= plan.concurrent) {
+    return res.writeHead(409).end(plan.concurrent === 1 ? "a run is already in progress" : `your ${plan.name} plan runs ${plan.concurrent} builds at once; one has to finish first`);
+  }
+  if (access.buildsThisMonth(who) >= plan.builds) {
+    return res.writeHead(402).end(`You've used all ${plan.builds} builds in the ${plan.name} plan this month. Upgrade under Plan for more.`);
+  }
+  if (jobs.size >= MAX_JOBS) return res.writeHead(503, { "retry-after": "30" }).end("Conjure is busy right now; try again in a minute");
   const controller = new AbortController();
-  current = { controller, label, startedAt: new Date().toISOString() };
+  const id = `run_${(++jobSeq).toString(36)}_${Date.now().toString(36)}`;
+  jobs.set(id, { id, space, by: who.name, controller, label, startedAt: new Date().toISOString() });
   let finished = false;
   // A dropped connection (phone screen locked, tab closed) does not cancel the run by default:
   // the result lands in history, and Stop / POST /api/cancel still cancels it.
@@ -245,11 +306,14 @@ async function runJob(req, res, job, label) {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
   const send = (e) => !res.writableEnded && res.write(`data: ${JSON.stringify(e)}\n\n`);
   const provider = makeProvider({ delayMs: MOCK_DELAY });
-  send({ type: "start", provider: provider.name, model: provider.model });
+  send({ type: "start", id, provider: provider.name, model: provider.model });
 
   const onEvent = (e) => {
     if (e.type === "error") return; // reported below with a friendly message
-    if (e.type === "done") send({ type: "done", manifest: e.manifest, refinement: e.refinement, dir: path.basename(e.workspace) });
+    if (e.type === "done") {
+      access.countBuild(who);
+      send({ type: "done", manifest: e.manifest, refinement: e.refinement, dir: path.basename(e.workspace) });
+    }
     else if (e.workspace) send({ ...e, workspace: path.basename(e.workspace) });
     else send(e);
   };
@@ -260,7 +324,7 @@ async function runJob(req, res, job, label) {
     if (message) send({ type: "error", message });
   } finally {
     finished = true;
-    current = null;
+    jobs.delete(id);
     res.end();
   }
 }
@@ -443,7 +507,8 @@ async function handleAdmin(req, res, url, who) {
           ? process.env.CONJURE_LLM_MODEL || "qwen2.5:3b"
           : process.env.CONJURE_PREDICT_MODEL || process.env.CONJURE_MODEL || "claude-opus-5-5",
         allowance: await modelUsage(),
-        queue: predictions.stats(), builderBusy: Boolean(current),
+        queue: predictions.stats(), builderBusy: jobs.size > 0, builds: [...jobs.values()].map((j) => jobView(j, true)),
+        accounts: admin ? access.listUsers().length : undefined,
         day: summarize(last24), week: summarize(all.filter((r) => Date.now() - Date.parse(r.createdAt) < 7 * DAY)),
         products, known: KNOWN_PRODUCTS, search: search.configured,
         staff: admin ? access.listStaff() : undefined,
@@ -503,30 +568,54 @@ const server = http.createServer(async (req, res) => {
       return res.writeHead(415).end("content-type must be application/json");
     }
   }
+  // Product keys reach only the /v1 API. Users build in the studio; the dashboard, the admin API and
+  // the /v1 prediction API are for staff and products.
+  if (who.kind === "product" && !url.pathname.startsWith("/v1/")) return json(res, 403, { error: "product keys can only call /v1" });
+  if (who.kind === "user" && (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/api/admin/") || url.pathname === "/dashboard")) {
+    return json(res, 403, { error: "staff only" });
+  }
   if (url.pathname.startsWith("/v1/")) return handleV1(req, res, url, who);
-  // Product keys reach only the /v1 API; the dashboard and studio are for staff.
-  if (who.kind !== "staff") return json(res, 403, { error: "product keys can only call /v1" });
   if (url.pathname === "/logout" && req.method === "POST") return logout(req, res);
   if (url.pathname.startsWith("/api/admin/")) return handleAdmin(req, res, url, who);
 
   if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/dashboard")) {
-    return serveFile(res, path.join(PUBLIC, "dashboard.html"));
+    return serveFile(res, path.join(PUBLIC, who.kind === "user" ? "index.html" : "dashboard.html"));
   }
   if (req.method === "GET" && (url.pathname === "/studio" || url.pathname === "/index.html")) {
     return serveFile(res, path.join(PUBLIC, "index.html"));
   }
+  const space = access.spaceFor(who);
+  // Admins may name another account's space (from ?all=1 history) to download its builds.
+  const spaceParam = url.searchParams.get("space");
+  const readSpace = spaceParam && isAdmin(who) && SPACE_RE.test(spaceParam) ? spaceParam : space;
   if (req.method === "GET" && url.pathname === "/api/status") {
+    if (url.searchParams.get("plan") === "refresh") plans.forget(who.id);
+    const mine = jobsOf(space);
+    const { plan, status } = await planOf(req, who);
+    const back = `${PUBLIC_URL || `https://${publicHost(req)}`}/studio`;
     return json(res, 200, {
-      live: liveModelConfigured() && !mockMode(), model: liveModelConfigured() && !mockMode() ? makeProvider().model : null, busy: Boolean(current), previewOrigin: PREVIEW_ORIGIN,
-      job: current ? { label: current.label, startedAt: current.startedAt } : null,
+      live: liveModelConfigured() && !mockMode(), model: liveModelConfigured() && !mockMode() ? makeProvider().model : null,
+      busy: mine.length > 0, previewOrigin: PREVIEW_ORIGIN, previewBase: `${PREVIEW_ORIGIN}/${space}`,
+      job: mine[0] ? jobView(mine[0]) : null, jobs: mine.map((j) => jobView(j)),
+      ...(isAdmin(who) && url.searchParams.get("all") === "1" ? { allJobs: [...jobs.values()].map((j) => jobView(j, true)) } : {}),
+      me: { name: who.name, kind: who.kind, role: who.role },
+      plan: {
+        id: plan.id, name: plan.name, builds: Number.isFinite(plan.builds) ? plan.builds : null, used: access.buildsThisMonth(who),
+        concurrent: plan.concurrent, status,
+        ...(who.kind === "user" ? { links: plans.links(back) } : {}),
+      },
     });
   }
   if (req.method === "GET" && url.pathname === "/api/history") {
-    return json(res, 200, await history());
+    if (isAdmin(who) && url.searchParams.get("all") === "1") {
+      const spaces = (await fs.readdir(OUT, { withFileTypes: true }).catch(() => [])).filter((d) => d.isDirectory() && SPACE_RE.test(d.name)).map((d) => d.name);
+      return json(res, 200, await history(spaces, { tagged: true }));
+    }
+    return json(res, 200, await history([space]));
   }
   if (req.method === "GET" && url.pathname === "/api/download") {
     const name = url.searchParams.get("dir") ?? "";
-    const dir = name && !/[\\/]/.test(name) ? confined(OUT, name) : null;
+    const dir = name && !/[\\/]/.test(name) ? confined(spaceDir(readSpace), name) : null;
     if (!dir) return res.writeHead(400).end("dir must name a deliverable folder");
     try {
       await fs.access(path.join(dir, "conjure.json"));
@@ -542,9 +631,17 @@ const server = http.createServer(async (req, res) => {
     return res.end(z.buffer);
   }
   if (req.method === "POST" && url.pathname === "/api/cancel") {
-    if (!current) return json(res, 200, { cancelled: false });
-    current.controller.abort();
-    return json(res, 200, { cancelled: true });
+    // ?id=<run id> stops one run; without it, every run of this account. Admins may stop any run.
+    const id = url.searchParams.get("id");
+    if (id) {
+      const j = jobs.get(id);
+      if (!j || (j.space !== space && !isAdmin(who))) return json(res, 404, { error: "no such run" });
+      j.controller.abort();
+      return json(res, 200, { cancelled: true });
+    }
+    const mine = jobsOf(space);
+    for (const j of mine) j.controller.abort();
+    return json(res, 200, { cancelled: mine.length > 0 });
   }
   if (req.method === "POST" && (url.pathname === "/api/conjure" || url.pathname === "/api/refine")) {
     let payload;
@@ -557,15 +654,22 @@ const server = http.createServer(async (req, res) => {
       if (typeof payload.intent !== "string" || !payload.intent.trim() || payload.intent.length > 4000) {
         return res.writeHead(400).end("intent must be a non-empty string under 4000 chars");
       }
-      return runJob(req, res, (provider, signal, onEvent) =>
-        conjure({ intent: payload.intent, provider, outDir: OUT, signal, onEvent }), payload.intent.slice(0, 120));
+      await fs.mkdir(spaceDir(space), { recursive: true });
+      return runJob(req, res, who, (provider, signal, onEvent) =>
+        conjure({ intent: payload.intent, provider, outDir: spaceDir(space), signal, onEvent }), payload.intent.slice(0, 120));
     }
-    const dir = typeof payload.dir === "string" && !payload.dir.includes("/") && !payload.dir.includes("\\") ? confined(OUT, payload.dir) : null;
+    // Refinements only ever touch the caller's own builds.
+    const dir = typeof payload.dir === "string" && !payload.dir.includes("/") && !payload.dir.includes("\\") ? confined(spaceDir(space), payload.dir) : null;
     if (!dir) return res.writeHead(400).end("dir must name a deliverable folder");
+    try {
+      await fs.access(path.join(dir, "conjure.json"));
+    } catch {
+      return res.writeHead(404).end("no such build");
+    }
     if (typeof payload.change !== "string" || !payload.change.trim() || payload.change.length > 4000) {
       return res.writeHead(400).end("change must be a non-empty string under 4000 chars");
     }
-    return runJob(req, res, (provider, signal, onEvent) =>
+    return runJob(req, res, who, (provider, signal, onEvent) =>
       refine({ dir, change: payload.change, provider, signal, onEvent }), `refine ${payload.dir}: ${payload.change.slice(0, 100)}`);
   }
   res.writeHead(404).end("not found");
@@ -582,12 +686,13 @@ const preview = http.createServer(async (req, res) => {
   }
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
-  // Run records stay private: only the deliverable's own files are served.
-  const parts = rel.split("/");
-  if (parts.length === 2 && (parts[1] === "transcript.jsonl" || parts[1] === "conjure.json")) return res.writeHead(404).end("not found");
-  if (path.basename(rel) === "transcript.jsonl") return res.writeHead(404).end("not found");
   const file = confined(OUT, rel);
   if (!file) return res.writeHead(400).end("bad path");
+  // Paths are /<space>/<deliverable>/<file>. Run records stay private: only the deliverable's own files are served.
+  const parts = rel.split("/");
+  if (parts.length < 3 || !SPACE_RE.test(parts[0])) return res.writeHead(404).end("not found");
+  if (parts.length === 3 && (parts[2] === "transcript.jsonl" || parts[2] === "conjure.json")) return res.writeHead(404).end("not found");
+  if (path.basename(rel) === "transcript.jsonl") return res.writeHead(404).end("not found");
   return serveFile(res, file);
 });
 
