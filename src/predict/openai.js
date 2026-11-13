@@ -9,6 +9,13 @@ import { authHeaders } from "../llm-auth.js";
 const TIMEOUT_MS = Number(process.env.CONJURE_LLM_TIMEOUT_MS || 600_000);
 // "none" turns thinking off on reasoning models (qwen3, gpt-oss) so the token budget goes to the answer.
 const REASONING = process.env.CONJURE_LLM_REASONING || "";
+// With thinking on, the model reasons before it answers and that reasoning counts against
+// max_tokens, so each call gets this much extra room on top of its answer budget.
+const THINKING = Boolean(REASONING) && REASONING !== "none";
+const THINK_TOKENS = Math.max(0, Number(process.env.CONJURE_LLM_THINK_TOKENS ?? 4096) || 0);
+/** max_tokens for a call: the answer budget, plus the thinking budget when thinking is on. */
+export const withThinking = (maxTokens, thinking = THINKING, extra = THINK_TOKENS) =>
+  typeof maxTokens === "number" && thinking ? maxTokens + extra : maxTokens;
 // A Cloudflare Access service token, when the model gateway sits behind Access.
 // Yandex Cloud AI Studio (Conjure Russia) also needs the folder ID, sent as OpenAI-Project.
 const ACCESS = {
@@ -32,7 +39,7 @@ async function chat({ baseUrl, model, apiKey, fetchImpl = fetch }, body) {
   return fetchImpl(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(await authHeaders(apiKey)), ...ACCESS },
-    body: JSON.stringify({ model, ...(REASONING ? { reasoning_effort: REASONING } : {}), ...body }),
+    body: JSON.stringify({ model, ...(REASONING ? { reasoning_effort: REASONING } : {}), ...body, max_tokens: withThinking(body.max_tokens) }),
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
 }

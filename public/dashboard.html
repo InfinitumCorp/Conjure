@@ -140,7 +140,6 @@
         <div class="row">
           <label class="label">Agents<input type="number" id="agents" min="4" max="60" value="16"></label>
           <label class="label">Rounds<input type="number" id="rounds" min="1" max="8" value="3"></label>
-          <label class="check"><input type="checkbox" id="mock"> Offline (mock)</label>
           <label class="check" id="researchWrap" hidden><input type="checkbox" id="research" checked> Research the web first</label>
           <button class="btn-primary" id="run">Run forecast</button>
         </div>
@@ -246,7 +245,7 @@ function render() {
   $("productForm").hidden = !admin;
   $("researchWrap").hidden = !d.search;
   $("stats").innerHTML = [
-    stat("Mode", d.live ? "Live" : "Offline mock"), stat("Model", d.live ? String(d.model).replace(/^@cf\/[^/]+\//, "") : "mock"),
+    stat("Mode", d.live ? "Live" : "No live model"), stat("Model", d.live ? String(d.model).replace(/^gpt:\/\/[^/]+\//, "").replace(/^@cf\/[^/]+\//, "") : "none"),
     stat("Web search", d.search ? "On (Yandex, Russia)" : "Off"),
     // The free Workers AI allowance shared by the account (resets 00:00 UTC); a forecast uses about 300.
     ...(d.allowance ? [stat("Free model allowance left today", `${Math.round(d.allowance.remaining).toLocaleString()} of ${d.allowance.limit.toLocaleString()} (≈${Math.floor(d.allowance.remaining / 300)} forecasts)`)] : []),
@@ -399,7 +398,7 @@ $("tryForm").addEventListener("submit", async (e) => {
   if (!m || !m.question) { $("tryOut").innerHTML = `<p class="err">Write @conjure and a question, e.g. “@conjure will we hit plan this quarter?”</p>`; return; }
   $("run").disabled = true;
   try {
-    const started = await api("/v1/predictions", { method: "POST", body: JSON.stringify({ question: m.question, context: [m.context, $("ctx").value.trim()].filter(Boolean).join("\n\n"), agents: +$("agents").value, rounds: +$("rounds").value, mock: $("mock").checked, research: !$("researchWrap").hidden && $("research").checked, source: "dashboard", user: data?.me.name }) });
+    const started = await api("/v1/predictions", { method: "POST", body: JSON.stringify({ question: m.question, context: [m.context, $("ctx").value.trim()].filter(Boolean).join("\n\n"), agents: +$("agents").value, rounds: +$("rounds").value, research: !$("researchWrap").hidden && $("research").checked, source: "dashboard", user: data?.me.name }) });
     stream?.close();
     stream = new EventSource(`/v1/predictions/${encodeURIComponent(started.id)}/events`);
     stream.onmessage = (ev) => {
@@ -467,5 +466,7 @@ refresh();
 setInterval(() => { if (!document.hidden) refresh(); }, 10000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>
+<script src="/amplitude.vendor.js" defer></script>
+<script src="/amplitude-boot.js" defer></script>
 </body>
 </html>

@@ -105,6 +105,7 @@
   .refine.on { display: flex; }
   .refine ol { margin: 0; padding-left: 20px; font-size: 14px; color: var(--muted); }
   .meta { font-size: 13px; color: var(--muted); }
+  .plan { display: grid; gap: 12px; }
 
   /* Footer */
   .foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 22px var(--gutter); border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
@@ -145,16 +146,23 @@
       <button id="go" class="btn-primary">Conjure</button>
       <button id="stop" class="btn-secondary" disabled>Stop</button>
     </div>
-    <div class="options">
-      <label class="check"><input type="checkbox" id="mock"> Offline (mock)</label>
-      <label class="check"><input type="checkbox" id="flaw"> Inject a bug</label>
-    </div>
     <details class="logwrap" open>
       <summary>Build log</summary>
       <div class="log" id="log" aria-live="polite"></div>
     </details>
     <h2 id="hist-title">History</h2>
     <ul class="hist" id="hist" aria-labelledby="hist-title"></ul>
+    <h2 id="plan-title">Plan</h2>
+    <div class="plan" aria-labelledby="plan-title">
+      <p class="meta" id="planText">Checking your plan…</p>
+      <p class="meta" id="planOffer" hidden>Free: 5 builds a month. Pro: 100 builds a month, 2 at a time, $20/month. Team: 300 builds a month per seat, for businesses, $40 per seat/month. Billing is handled by Cumulus with your Cumulus ID.</p>
+      <div class="row" id="planLinks" hidden>
+        <a id="upPro" class="btn-primary" href="#">Upgrade to Pro</a>
+        <a id="upTeam" class="btn-secondary" href="#">Team plan</a>
+        <a id="manage" class="btn-secondary" href="#">Manage billing</a>
+      </div>
+      <form method="post" action="/logout" id="logoutForm" hidden><button class="btn-secondary">Sign out</button></form>
+    </div>
   </section>
   <section class="right" aria-labelledby="preview-title">
     <h2 id="preview-title">Preview</h2>
@@ -207,13 +215,35 @@ function select(item) {
   $("selMeta").textContent = [item.provider, money(item.costUsd), `${(item.changes || []).length} change(s)`].filter(Boolean).join(" · ");
 }
 
+// The Plan section: what this account's plan allows, and links to the Cumulus billing hub.
+function renderPlan(p, me) {
+  if (!p) return;
+  const used = p.builds == null ? `${p.used} build(s) this month` : `${p.used} of ${p.builds} builds used this month`;
+  const note = p.status === "signin" ? " · sign out and in again to refresh your plan" : p.status === "unavailable" ? " · billing can't be reached right now" : "";
+  $("planText").textContent = `${p.name} · ${used} · ${p.concurrent} at a time${note}`;
+  const links = p.links;
+  $("planLinks").hidden = !links;
+  $("planOffer").hidden = !links;
+  if (links) {
+    $("upPro").href = links.pro; $("upTeam").href = links.team; $("manage").href = links.manage;
+    $("upPro").hidden = p.id !== "conjure_free";
+    $("upTeam").hidden = p.id === "conjure_team";
+  }
+  $("logoutForm").hidden = me?.name === "Local";
+}
+
+let firstLoad = true;
 async function refresh(selectDir) {
-  const sr = await fetch("/api/status");
+  // On first load, ask the billing hub again: the person may be back from checkout.
+  const sr = await fetch(firstLoad ? "/api/status?plan=refresh" : "/api/status");
+  firstLoad = false;
   if (sr.status === 401) { location.href = "/login"; return; }
   const s = await sr.json();
-  previewOrigin = s.previewOrigin;
-  $("mode").textContent = s.live ? "Live · Claude" : "Offline · mock builds (add an Anthropic API key for live Claude)";
-  if (!s.live) $("mock").checked = true;
+  // Each account's builds are served under its own space on the preview origin.
+  previewOrigin = s.previewBase ?? s.previewOrigin;
+  renderPlan(s.plan, s.me);
+  $("mode").textContent = s.live ? `Live · ${String(s.model || "").replace(/^gpt:\/\/[^/]+\//, "").replace(/^@cf\/[^/]+\//, "")}` : "No live model is configured on this server";
+  $("go").disabled = !s.live;
   watchServerRun(s);
   const h = await (await fetch("/api/history")).json();
   $("hist").innerHTML = "";
@@ -297,13 +327,13 @@ async function run(url, body) {
 $("go").onclick = () => {
   const intent = $("intent").value.trim();
   if (!intent) return $("intent").focus();
-  run("/api/conjure", { intent, mock: $("mock").checked, flaw: $("flaw").checked });
+  run("/api/conjure", { intent });
 };
 $("apply").onclick = () => {
   const change = $("change").value.trim();
   if (!selected || !change) return $("change").focus();
   $("change").value = "";
-  run("/api/refine", { dir: selected.dir, change, mock: $("mock").checked });
+  run("/api/refine", { dir: selected.dir, change });
 };
 $("stop").onclick = async () => {
   await fetch("/api/cancel", { method: "POST" }).catch(() => {});
@@ -323,5 +353,7 @@ $("change").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctr
 })();
 refresh();
 </script>
+<script src="/amplitude.vendor.js" defer></script>
+<script src="/amplitude-boot.js" defer></script>
 </body>
 </html>

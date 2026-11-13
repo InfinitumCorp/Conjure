@@ -226,10 +226,15 @@ export class OpenWeightsProvider {
     const body = {
       model: this.model,
       max_tokens: 64_000,
-      messages: openWeightsMessages(system, messages),
+      // Many open-weight servers accept response_format but ignore it, so the schema is
+      // also spelled out in the system prompt, which they do follow.
+      messages: openWeightsMessages(
+        jsonSchema ? `${system ?? ""}\n\nReply with only one JSON object, no prose and no code fences, matching this JSON Schema:\n${JSON.stringify(jsonSchema)}` : system,
+        messages,
+      ),
       ...(tools?.length ? { tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.input_schema } })) } : {}),
       // Structured output for the plan step. Servers that predate response_format
-      // (older llama.cpp) still answer; the plan is parsed and retried upstream.
+      // (older llama.cpp) still answer; the engine parses leniently and retries once.
       ...(jsonSchema ? { response_format: { type: "json_schema", json_schema: { name: "output", schema: jsonSchema } } } : {}),
       ...(this.reasoning ? { reasoning_effort: this.reasoning } : {}),
     };

@@ -24,10 +24,12 @@ Status key: ✅ done · 🔨 in progress · ⏳ blocked · ⬜ not started
 - `conjure refine <dir> "<change>"`: apply a follow-up change to an existing deliverable, re-verify, record it in `conjure.json` history
 - Refine from the web UI's history list
 
-## M5 — Live validation ⏳ (harness ready; needs an API key in `.env`)
+## M5 — Live validation 🔨
 - ✅ Eval harness: `npm run eval -- --yes` runs 5 representative intents and records pass rate, repairs, tokens, cost
-- ⏳ Run it live and record the baseline
-- Tune prompts and effort level from those results
+- ✅ Baseline on open-weight models (2026-11-12, conjure-llm gateway, Workers AI Qwen3 30B, thinking off): **4/5 passed**, all four on the first try (pomodoro, todo, converter, csv-stats, 9-15 s each); markdown previewer failed after 3 repair rounds with no files written
+- ✅ Fix that made it pass: open-weight servers ignored `response_format`, so the plan schema is now also in the system prompt, the plan is parsed leniently (code fences, surrounding prose) and retried once (was 0/5 before)
+- ⬜ Baseline on the Russia models (Yandex AI Studio qwen3.6-35b-a3b), which will run Conjure from now on
+- ⬜ Get the markdown case through: the forge loop's tool calls on open-weight models
 
 ## M6 — Ship it ✅
 - ✅ Download a deliverable as a zip: `conjure zip <dir>` or the UI's **Download .zip** button (zero-dependency writer, transcript excluded, verified with Python's `zipfile` and Windows `Expand-Archive`)

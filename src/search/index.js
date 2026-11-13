@@ -3,7 +3,28 @@
 import { modelSetup } from "../predict/service.js";
 import { fetchPage } from "./crawl.js";
 import { research, asBrief } from "./research.js";
-import { searchConfigured, yandexSearch } from "./yandex.js";
+import { searchConfigured as yandexConfigured, yandexSearch } from "./yandex.js";
+import { veilSearch, veilUrl } from "./veil.js";
+
+/** True when this server can search the web: Yandex Search, VEIL Search, or both. */
+export function searchConfigured(env = process.env) {
+  if (env.CONJURE_SEARCH === "off") return false;
+  return yandexConfigured(env) || Boolean(veilUrl(env));
+}
+
+/** Yandex first when it's set up (it signs with the VM's account); VEIL takes over if Yandex fails or isn't set. */
+export async function webSearch(query, o = {}) {
+  const env = o.env ?? process.env;
+  const veil = Boolean(veilUrl(env));
+  if (yandexConfigured(env)) {
+    try {
+      return await yandexSearch(query, o);
+    } catch (err) {
+      if (!veil || o.signal?.aborted) throw err;
+    }
+  }
+  return veilSearch(query, o);
+}
 
 const CACHE_MS = 10 * 60_000;
 const CACHE_MAX = 200;
@@ -45,7 +66,7 @@ export class SearchService {
     }
     const result = await research(question, {
       complete,
-      search: this.deps.search ?? ((q, o) => yandexSearch(q, o)),
+      search: this.deps.search ?? ((q, o) => webSearch(q, o)),
       fetchPage: this.deps.fetchPage ?? fetchPage,
       onEvent,
       signal,

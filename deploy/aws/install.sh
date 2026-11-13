@@ -120,6 +120,8 @@ WorkingDirectory=/opt/conjure/current
 EnvironmentFile=/etc/conjure/env
 Environment=NODE_ENV=production HOST=127.0.0.1 PORT=4317 PREVIEW_PORT=4318
 Environment=CONJURE_OUT=/var/lib/conjure CONJURE_DATA=/var/lib/conjure-data PREVIEW_ORIGIN=https://$PREVIEW_HOST
+# Conjure Search on VEIL Search, Infinitum's own engine (no key); Yandex is used first when configured.
+Environment=VEIL_SEARCH_URL=https://infinitumveil.app/api/search
 ExecStart=/usr/local/bin/node src/server.js
 Restart=always
 RestartSec=2

@@ -1,6 +1,8 @@
 // Conjure Search: the crawler's safety rules, Yandex parsing, ranking and the cited-answer pipeline.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { veilSearch, veilUrl } from "../src/search/veil.js";
+import { searchConfigured as anySearchConfigured, webSearch } from "../src/search/index.js";
 import { allowedUrl, blockedAddress, extractText, fetchPage } from "../src/search/crawl.js";
 import { parseYandexXml, yandexSearch, searchConfigured } from "../src/search/yandex.js";
 import { passages, rank, research, asBrief, terms } from "../src/search/research.js";
@@ -176,5 +178,37 @@ describe("research pipeline", () => {
     assert.equal(calls, 2, "the second ask didn't search again");
     const off = new SearchService({ configured: () => false });
     await assert.rejects(off.ask("anything at all"), (e) => e.status === 503);
+  });
+});
+
+describe("VEIL Search", () => {
+  const veilFetch = (seen) => async (url, init) => {
+    seen.push({ url, body: JSON.parse(init.body) });
+    return Response.json({ results: [{ title: "<b>Key rate</b>", url: "https://www.cbr.ru/rate", snippet: "16% &amp; holding" }, { title: "bad", url: "javascript:1" }] });
+  };
+
+  test("posts the query and returns results in Conjure's shape", async () => {
+    const seen = [];
+    const r = await veilSearch("key rate", { fetchImpl: veilFetch(seen), env: { VEIL_SEARCH_URL: "https://infinitumveil.app/api/search" } });
+    assert.deepEqual(r, [{ url: "https://www.cbr.ru/rate", domain: "cbr.ru", title: "Key rate", snippet: "16% & holding" }]);
+    assert.deepEqual(seen, [{ url: "https://infinitumveil.app/api/search", body: { q: "key rate" } }]);
+  });
+
+  test("needs an https URL, and counts as search being on", () => {
+    assert.equal(veilUrl({ VEIL_SEARCH_URL: "http://infinitumveil.app/api/search" }), null);
+    assert.equal(veilUrl({ VEIL_SEARCH_URL: "http://localhost:8787/api/search" }), "http://localhost:8787/api/search");
+    assert.equal(anySearchConfigured({ VEIL_SEARCH_URL: "https://infinitumveil.app/api/search" }), true);
+    assert.equal(anySearchConfigured({ VEIL_SEARCH_URL: "https://infinitumveil.app/api/search", CONJURE_SEARCH: "off" }), false);
+    assert.equal(anySearchConfigured({}), false);
+  });
+
+  test("takes over when Yandex fails", async () => {
+    const seen = [];
+    const fetchImpl = async (url, init) => url.includes("yandex") ? new Response("{}", { status: 500 }) : veilFetch(seen)(url, init);
+    const env = { CONJURE_SEARCH_KEY: "k", CONJURE_SEARCH_FOLDER: "f", VEIL_SEARCH_URL: "https://infinitumveil.app/api/search" };
+    const r = await webSearch("key rate", { fetchImpl, env });
+    assert.equal(r[0].domain, "cbr.ru");
+    assert.equal(seen.length, 1);
+    await assert.rejects(webSearch("key rate", { fetchImpl, env: { CONJURE_SEARCH_KEY: "k", CONJURE_SEARCH_FOLDER: "f" } }), /Yandex Search answered 500/);
   });
 });

@@ -18,12 +18,25 @@ export function openWeightsConfigured() {
   return Boolean(process.env.CONJURE_OPEN_WEIGHTS_URL || process.env.CONJURE_OPEN_WEIGHTS_MODEL || process.env.CONJURE_LLM_URL);
 }
 
+/** The scripted offline provider is used only when asked for explicitly: CONJURE_MOCK=1 (the
+ *  test suite) or the CLI's --mock. Servers never set it; Conjure is live only. */
+export const mockMode = () => process.env.CONJURE_MOCK === "1";
+
+/** A real model is configured: Claude credentials or an open-weight server. */
+export const liveModelConfigured = () => hasCredentials() || openWeightsConfigured() || process.env.CONJURE_PROVIDER === "open-weights";
+
+export class NoLiveModelError extends Error {
+  constructor() {
+    super("No live model is configured on this server (set CONJURE_LLM_URL or ANTHROPIC_API_KEY).");
+  }
+}
+
 export function makeProvider({ mock, model, flaw, delayMs } = {}) {
-  // Claude stays first choice; the keyless open-weight server is the fallback
-  // before the offline mock, so Conjure forges for real with zero API keys.
+  // Claude stays first choice, then the open-weight server. There is no silent fallback to a
+  // demo: with no model configured this throws, unless the mock was asked for explicitly.
   const forcedOpenWeights = process.env.CONJURE_PROVIDER === "open-weights";
-  const useMock = mock ?? (process.env.CONJURE_MOCK === "1" || (!hasCredentials() && !openWeightsConfigured() && !forcedOpenWeights));
-  if (useMock) return new MockProvider({ flaw, delayMs });
+  if (mock === true || mockMode()) return new MockProvider({ flaw, delayMs });
+  if (!liveModelConfigured()) throw new NoLiveModelError();
   if (!hasCredentials() || forcedOpenWeights) {
     return new OpenWeightsProvider({ model: model || process.env.CONJURE_OPEN_WEIGHTS_MODEL });
   }

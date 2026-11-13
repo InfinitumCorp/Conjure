@@ -97,10 +97,13 @@ export async function finishSignIn({ issuer, clientId, redirectUri, secret, quer
   }
   const out = await res.json().catch(() => ({}));
   if (!res.ok || !out.profile || !out.profile.cid) throw new Error(out.error || "Cumulus ID did not accept that sign-in.");
-  return { profile: out.profile, next: pending.next };
+  // The access token lets this server ask the Cumulus billing hub what the person pays for.
+  const token = typeof out.access_token === "string" && out.access_token.length <= 8000 ? out.access_token : null;
+  const expiresIn = Number(out.expires_in) > 0 ? Number(out.expires_in) : null;
+  return { profile: out.profile, next: pending.next, token, expiresIn };
 }
 
-/** True when the profile is allowed in. An empty owner list lets nobody in. */
+/** True when the profile is one of the owners (admins). An empty owner list makes nobody an owner. */
 export function isOwner(profile, owners) {
   if (!profile) return false;
   const ids = [profile.cid, profile.username, profile.handle, profile.email].filter(Boolean).map((s) => String(s).toLowerCase());
