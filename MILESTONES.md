@@ -29,7 +29,8 @@ Status key: ✅ done · 🔨 in progress · ⏳ blocked · ⬜ not started
 - ✅ Baseline on open-weight models (2026-11-12, conjure-llm gateway, Workers AI Qwen3 30B, thinking off): **4/5 passed**, all four on the first try (pomodoro, todo, converter, csv-stats, 9-15 s each); markdown previewer failed after 3 repair rounds with no files written
 - ✅ Fix that made it pass: open-weight servers ignored `response_format`, so the plan schema is now also in the system prompt, the plan is parsed leniently (code fences, surrounding prose) and retried once (was 0/5 before)
 - ⬜ Baseline on the Russia models (Yandex AI Studio qwen3.6-35b-a3b), which will run Conjure from now on
-- ⬜ Get the markdown case through: the forge loop's tool calls on open-weight models
+- 🔨 Get the markdown case through: the cause was that the model wrote its tool calls as `<tool_call>` text the server didn't convert, so nothing ran. The provider now runs those calls itself (fixed and unit-tested 2026-11-13; the live re-run is still to do)
+- ✅ Live only (2026-11-13): no demo fallbacks; with no model configured the server answers 503 and the UI disables Conjure. Thinking is on for Conjure Russia (`CONJURE_LLM_REASONING=medium`, 4096 extra tokens per call for it)
 
 ## M6 — Ship it ✅
 - ✅ Download a deliverable as a zip: `conjure zip <dir>` or the UI's **Download .zip** button (zero-dependency writer, transcript excluded, verified with Python's `zipfile` and Windows `Expand-Archive`)
