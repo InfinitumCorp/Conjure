@@ -249,14 +249,24 @@ export class OpenWeightsProvider {
     const out = await res.json();
     const msg = out.choices?.[0]?.message ?? {};
     // Some servers inline the model's thinking; the engine only wants the answer.
-    const text = String(msg.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    let text = String(msg.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    // Some servers don't parse the model's own tool-call format (Qwen/Hermes <tool_call> tags)
+    // and hand it back as plain text; run those calls instead of ignoring them.
+    let calls = msg.tool_calls ?? [];
+    if (!calls.length && tools?.length) {
+      const fromText = textToolCalls(text);
+      if (fromText.calls.length) {
+        calls = fromText.calls;
+        text = fromText.text;
+      }
+    }
     if (text && onText) onText(text, phase);
     const content = [];
     if (text) content.push({ type: "text", text });
-    for (const c of msg.tool_calls ?? []) {
+    for (const c of calls) {
       let input = {};
       try {
-        input = typeof c.function?.arguments === "string" ? JSON.parse(c.function.arguments || "{}") : c.function?.arguments ?? {};
+        input = typeof c.function?.arguments === "string" ? lenientJson(c.function.arguments || "{}") ?? {} : c.function?.arguments ?? {};
       } catch {
         input = {};
       }
@@ -272,6 +282,38 @@ export class OpenWeightsProvider {
 }
 
 let openWeightsCall = 0;
+
+/**
+ * Pulls Hermes/Qwen-style `<tool_call>{"name":..,"arguments":{..}}</tool_call>` blocks out of
+ * plain text. Returns OpenAI-shaped calls and the text with those blocks removed.
+ * Tolerates a missing closing tag on the last block and invalid JSON escapes (e.g. a regex `\s`).
+ */
+export function textToolCalls(text) {
+  const calls = [];
+  const rest = String(text ?? "").replace(/<tool_call>\s*([\s\S]*?)\s*(?:<\/tool_call>|$)/g, (whole, body) => {
+    const call = lenientJson(body.replace(/^```(?:json)?\s*|\s*```$/g, ""));
+    if (!call || typeof call.name !== "string") return whole;
+    const args = call.arguments ?? call.parameters ?? call.input ?? {};
+    calls.push({ id: `toolu_ow_${++openWeightsCall}`, function: { name: call.name, arguments: typeof args === "string" ? args : JSON.stringify(args) } });
+    return "";
+  });
+  return { calls, text: calls.length ? rest.trim() : String(text ?? "") };
+}
+
+function lenientJson(s) {
+  try {
+    return JSON.parse(s);
+  } catch {}
+  // Double backslashes that don't start a valid JSON escape, and escape raw control characters in strings.
+  const fixed = s
+    .replace(/\\(?!["\\/bfnrtu])/g, "\\\\")
+    .replace(/"(?:[^"\\]|\\.)*"/g, (str) => str.replace(/[\u0000-\u001f]/g, (c) => ({ "\n": "\\n", "\r": "\\r", "\t": "\\t" })[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`));
+  try {
+    return JSON.parse(fixed);
+  } catch {
+    return null;
+  }
+}
 
 /** The model server's own error message, so a used-up allowance reads as such. */
 async function openWeightsFailure(res) {

@@ -197,3 +197,24 @@ test("a jsonSchema request also spells the schema out in the system prompt", asy
   assert.ok(sys.content.startsWith("plan it\n\nReply with only one JSON object"));
   assert.ok(sys.content.includes(JSON.stringify(schema)));
 });
+
+test("tool calls the server left as <tool_call> text are still run (Qwen/Hermes format)", async () => {
+  // Exactly what qwen3 returned through the gateway in the markdown eval case: a regex `\s` (invalid JSON escape) and no native tool_calls.
+  const raw = '<tool_call>\n{"name": "write_file", "arguments": {"path": "script.js", "contents": "x.replace(/^(#{1,6})\s+(.+)$/gm, \\"<h$1>\\")"}}\n</tool_call>\n<tool_call>\n{"name": "finish", "arguments": {"summary": "done"}}\n</tool_call>';
+  const { p } = make({}, () => ({ choices: [{ message: { content: raw } }] }));
+  const out = await p.turn({ system: "s", messages: [{ role: "user", content: "go" }], tools: [{ name: "write_file", description: "", input_schema: {} }] });
+  const uses = out.content.filter((b) => b.type === "tool_use");
+  assert.equal(out.stop_reason, "tool_use");
+  assert.deepEqual(uses.map((u) => u.name), ["write_file", "finish"]);
+  assert.equal(uses[0].input.path, "script.js");
+  assert.equal(uses[0].input.contents, 'x.replace(/^(#{1,6})\s+(.+)$/gm, "<h$1>")');
+  assert.equal(out.content.some((b) => b.type === "text"), false);
+});
+
+test("<tool_call> text is left alone when no tools were offered", async () => {
+  const raw = '<tool_call>{"name": "finish", "arguments": {}}</tool_call>';
+  const { p } = make({}, () => ({ choices: [{ message: { content: raw } }] }));
+  const out = await p.turn({ system: "s", messages: [{ role: "user", content: "go" }] });
+  assert.equal(out.stop_reason, "end_turn");
+  assert.deepEqual(out.content, [{ type: "text", text: raw }]);
+});
